@@ -20,6 +20,8 @@
 #include <cpp/Device/DBG>
 #include <c/format/filesys/FAT.h>
 #include <c/format/audio/WAV.h>   // uni::WAVCodec / WAVStream (流式按块解析, 供后续替代手写解析)
+#include <c/format/audio/MP3.h>   // uni::MP3Codec
+#include <c/format/audio/FLAC.h>  // uni::FLACCodec
 #include <c/mempool.h>
 #include <c/data.h>
 #include <c/consio.h>
@@ -281,8 +283,10 @@ static void on_wav_seg(void* is_dir, ...) {
 	if (!nm) return;
 	stduint len = StrLength(nm);
 	if (len < 4) return;
-	const char* ext = nm + len - 4;
-	if (StrCompareInsensitive(ext, ".wav") != 0) return;
+	bool is_wav  = (StrCompareInsensitive(nm + len - 4, ".wav") == 0);
+	bool is_mp3  = (StrCompareInsensitive(nm + len - 4, ".mp3") == 0);
+	bool is_flac = (len >= 5) && (StrCompareInsensitive(nm + len - 5, ".flac") == 0);
+	if (!is_wav && !is_mp3 && !is_flac) return;
 	if (song_count >= MAX_SONGS) return;
 
 	char* full = (char*)mempool.allocate(len + 2);
@@ -292,7 +296,7 @@ static void on_wav_seg(void* is_dir, ...) {
 	song_paths[song_count++] = full;
 }
 
-// 扫描 SD 卡根目录下的所有 .wav 文件
+// 扫描 SD 卡根目录下的所有 .wav / .mp3 / .flac 文件
 static stduint collect_wav_files(FilesysFAT& fs) {
 	song_count = 0;
 	FAT_FileHandle h;
@@ -376,7 +380,7 @@ int main() {
 
 	// 扫描歌曲文件
 	collect_wav_files(fs);
-	outsfmt("Found %u WAV songs.\n", (unsigned)song_count);
+	outsfmt("Found %u songs.\n", (unsigned)song_count);
 	if (song_count == 0) {
 		lcd_draw_string(20, 110, "No WAV files found in root dir!", 0xF800, 0x0000);
 		while (1) SysDelay_ms(1000);
@@ -448,17 +452,45 @@ int main() {
 			continue;
 		}
 
-		// ---- uni 流式解析(替代手写 WAV 解析): FAT文件 → FileBlockDevice → WAVCodec/WAVStream ----
-		FileBlockDevice wav_file(fs, file_ptr, (stduint)fh.size, 512);
-		uni::WAVCodec codec;
+		// ---- uni 流式解析: FAT文件 → FileBlockDevice → 按格式选 Codec (WAV / MP3 / FLAC) ----
+		FileBlockDevice song_file(fs, file_ptr, (stduint)fh.size, 512);
+		uni::WAVCodec  wav_codec;
+		uni::MP3Codec  mp3_codec;
+		uni::FLACCodec flac_codec;
+		const uni::IAudioCodec* codec = nullptr;
+		bool matched = false;
+		if (wav_codec.Probe(song_file, matched) == uni::AudioResult::OK && matched) codec = &wav_codec;
+		else if (mp3_codec.Probe(song_file, matched) == uni::AudioResult::OK && matched) codec = &mp3_codec;
+		else if (flac_codec.Probe(song_file, matched) == uni::AudioResult::OK && matched) codec = &flac_codec;
+		if (!codec) {
+			outsfmt("Unsupported audio file: %s\n", current_file);
+			cur_song_idx = (cur_song_idx + 1) % song_count;
+			continue;
+		}
 		uni::IAudioStream* wstream = nullptr;
-		if (codec.OpenStream(wav_file, wstream, mempool) != uni::AudioResult::OK || !wstream) {
-			outsfmt("WAV OpenStream FAILED: %s\n", current_file);
+		if (codec->OpenStream(song_file, wstream, mempool) != uni::AudioResult::OK || !wstream) {
+			outsfmt("OpenStream FAILED: %s\n", current_file);
 			cur_song_idx = (cur_song_idx + 1) % song_count;
 			continue;
 		}
 		uni::AudioInfo ai{};
 		wstream->GetInfo(ai);
+
+		// SAI/PLL2 只能精确生成表里那几档速率; 源率不在其中(如 11025/11000)时重采样到 44100
+		uint32 source_rate = ai.format.sample_rate;
+		uni::IAudioStream* active_stream = wstream;
+		if (!uni::AudioBridge::isRateSupported(source_rate)) {
+			void* rs_mem = mempool.allocate(sizeof(uni::ResamplerStream), 3);
+			uni::ResamplerStream* rs = rs_mem ? new (rs_mem) uni::ResamplerStream(wstream, 44100, mempool) : nullptr;
+			if (rs && rs->IsValid()) {
+				active_stream = rs;
+				active_stream->GetInfo(ai);// 重取: 采样率已变为 44100
+				outsfmt("[Audio] Resample %u Hz -> 44100 Hz\r\n", (unsigned)source_rate);
+			} else {
+				if (rs) rs->Release();
+				outsfmt("[Audio] Resampler unavailable, unsupported rate %u Hz\r\n", (unsigned)source_rate);
+			}
+		}
 
 		// 引擎输出恒定 16bit 立体声(4B/帧); WAVCtrl 按引擎口径换算, 供 LCD/进度/结束判定
 		const uint32 ENGINE_FRAME_BYTES = 4;
@@ -478,10 +510,10 @@ int main() {
 
 		// 引擎由 AudioBridge 持有: codec 格式/I2S、SAI+PLL2 时钟、DMA 双缓冲与启动都在桥内完成
 		bool is_playing = true;
-		PcmRefillContext refill_ctx = { wstream, ai };
+		PcmRefillContext refill_ctx = { active_stream, ai };
 		if (!bridge.StartStream(ai.format, pcm_refill, &refill_ctx)) {
-			outsfmt("WAV stream empty or start failed: %s\n", current_file);
-			wstream->Release();
+			outsfmt("Stream empty or start failed: %s\n", current_file);
+			active_stream->Release();
 			cur_song_idx = (cur_song_idx + 1) % song_count;
 			continue;
 		}
@@ -504,7 +536,10 @@ int main() {
 			uint32 played_clamped = (played_data_pos > wav.data_size) ? wav.data_size : played_data_pos;
 			if (wav.byte_rate > 0) wav.cur_sec = played_clamped / wav.byte_rate;
 
-			if (bridge.isStreamOver() && played_data_pos >= wav.data_size) {
+			// 流耗尽即到曲尾: 此刻 DMA 里还压着最多两块真实数据, 等它播完再切曲。
+			// MP3 的总样本数是按码率估算的(MP3Codec::OpenStream), 与 WAV/FLAC 的精确值不同, 故不拿它当结束依据。
+			if (bridge.isStreamOver()) {
+				SysDelay_ms(120);
 				song_switch = true;
 				next_song_idx = (cur_song_idx + 1) % song_count;
 				break;
@@ -547,7 +582,8 @@ int main() {
 		}
 
 		bridge.StopStream();
-		if (wstream) { wstream->Release(); wstream = nullptr; }
+		// ResamplerStream 的析构会一并 Release 源流, 所以只释放最外层
+		if (active_stream) { active_stream->Release(); active_stream = nullptr; }
 		cur_song_idx = next_song_idx;
 	}
 }

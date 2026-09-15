@@ -338,7 +338,7 @@
             <v6WtE>0</v6WtE>
             <v6Rtti>0</v6Rtti>
             <VariousControls>
-              <MiscControls>-fno-strict-aliasing -Wno-c++98-compat -Wno-old-style-cast -Wno-c++98-c++11-compat-binary-literal -Wno-extra-semi-stmt -Wno-deprecated-copy-with-user-provided-copy -Wno-c++98-compat-pedantic -Wno-keyword-macro -Wno-invalid-constexpr  -Wno-empty-body</MiscControls>
+              <MiscControls>-fno-strict-aliasing -Wno-c++98-compat -Wno-old-style-cast -Wno-c++98-c++11-compat-binary-literal -Wno-extra-semi-stmt -Wno-deprecated-copy-with-user-provided-copy -Wno-c++98-compat-pedantic -Wno-keyword-macro -Wno-invalid-constexpr -Wno-empty-body</MiscControls>
               <Define>_MCU_STM32H7x</Define>
               <Undefine></Undefine>
               <IncludePath>D:\her\unisym\inc</IncludePath>
@@ -390,16 +390,6 @@
               <FileType>8</FileType>
               <FilePath>.\main.cpp</FilePath>
             </File>
-            <File>
-              <FileName>RGB-LCD.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\_opendev\RGB-LCD.cpp</FilePath>
-            </File>
-            <File>
-              <FileName>SDRAM.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\_opendev\SDRAM.cpp</FilePath>
-            </File>
           </Files>
         </Group>
         <Group>
@@ -414,16 +404,6 @@
               <FileName>ustm32h7.lib</FileName>
               <FileType>4</FileType>
               <FilePath>..\..\..\driver\ustm32h7.lib</FilePath>
-            </File>
-            <File>
-              <FileName>GPE-JPEG.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\..\..\..\..\..\unisym\lib\cpp\Device\Graphic\GPE-JPEG.cpp</FilePath>
-            </File>
-            <File>
-              <FileName>JPEG.cpp</FileName>
-              <FileType>8</FileType>
-              <FilePath>..\..\..\..\..\..\unisym\lib\cpp\fileformat\picture\JPEG.cpp</FilePath>
             </File>
           </Files>
         </Group>
