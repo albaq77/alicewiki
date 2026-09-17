@@ -39,6 +39,7 @@
 
 80-Memman
 81-USBS-Storage
+81-USBS-AudioCard
 82-USBM
 
 90-KanjiFont
