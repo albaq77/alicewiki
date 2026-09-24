@@ -48,3 +48,7 @@
 93-VideoPlay
 99-MecocoaRTOS
 
+H7:
+- Pic BMP/PNG/JPG
+- Aud PCM/MP3
+- Vid AVI(MJPG;PCM)
