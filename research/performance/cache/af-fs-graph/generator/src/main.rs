@@ -1,0 +1,451 @@
+use std::collections::{BTreeMap, HashMap};
+use std::env;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Command, exit};
+
+#[derive(Debug)]
+struct Config {
+    input: String,
+    output: String,
+    binary: String,
+    cache_line_size: u64,
+    dbg_viewtype: String,
+}
+
+fn print_usage_and_exit(prog_name: &str) -> ! {
+    eprintln!(
+        "Usage: {} -i <trace.csv> -o <graph.dot> --binary <app> [--cache-line-size <size>] [--dbg-viewtype <path>]",
+        prog_name
+    );
+    exit(1);
+}
+
+fn parse_args() -> Config {
+    let args: Vec<String> = env::args().collect();
+    let prog_name = args.get(0).cloned().unwrap_or_else(|| "generator".to_string());
+
+    let mut input = None;
+    let mut output = None;
+    let mut binary = None;
+    let mut cache_line_size = 64;
+    let mut dbg_viewtype = "dbg-viewtype".to_string();
+
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "-i" || arg == "--input" {
+            if i + 1 < args.len() {
+                input = Some(args[i + 1].clone());
+                i += 1;
+            } else {
+                print_usage_and_exit(&prog_name);
+            }
+        } else if arg == "-o" || arg == "--output" {
+            if i + 1 < args.len() {
+                output = Some(args[i + 1].clone());
+                i += 1;
+            } else {
+                print_usage_and_exit(&prog_name);
+            }
+        } else if arg == "--binary" {
+            if i + 1 < args.len() {
+                binary = Some(args[i + 1].clone());
+                i += 1;
+            } else {
+                print_usage_and_exit(&prog_name);
+            }
+        } else if arg == "--cache-line-size" {
+            if i + 1 < args.len() {
+                cache_line_size = args[i + 1].parse().unwrap_or(0);
+                if cache_line_size == 0 {
+                    eprintln!("Error: --cache-line-size cannot be 0.");
+                    exit(1);
+                }
+                i += 1;
+            } else {
+                print_usage_and_exit(&prog_name);
+            }
+        } else if arg == "--dbg-viewtype" {
+            if i + 1 < args.len() {
+                dbg_viewtype = args[i + 1].clone();
+                i += 1;
+            } else {
+                print_usage_and_exit(&prog_name);
+            }
+        } else {
+            eprintln!("Unknown argument: {}", arg);
+            print_usage_and_exit(&prog_name);
+        }
+        i += 1;
+    }
+
+    let input = input.unwrap_or_else(|| {
+        eprintln!("Error: Missing required argument -i/--input");
+        print_usage_and_exit(&prog_name);
+    });
+    let output = output.unwrap_or_else(|| {
+        eprintln!("Error: Missing required argument -o/--output");
+        print_usage_and_exit(&prog_name);
+    });
+    let binary = binary.unwrap_or_else(|| {
+        eprintln!("Error: Missing required argument --binary");
+        print_usage_and_exit(&prog_name);
+    });
+
+    Config {
+        input,
+        output,
+        binary,
+        cache_line_size,
+        dbg_viewtype,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Rw {
+    Read,
+    Write,
+}
+
+#[derive(Debug, Clone)]
+struct Access {
+    addr: u64,
+    rw: Rw,
+    size: u64,
+    core_id: u32,
+}
+
+impl Access {
+    fn parse(line: &str) -> Option<Self> {
+        let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+        if parts.len() < 6 {
+            eprintln!("Warning: invalid line format, skipping: {}", line);
+            return None;
+        }
+
+        let addr_str = parts[1];
+        let addr = if addr_str.starts_with("0x") || addr_str.starts_with("0X") {
+            u64::from_str_radix(&addr_str[2..], 16).ok()
+        } else {
+            addr_str.parse::<u64>().ok()
+        };
+        let addr = match addr {
+            Some(a) => a,
+            None => {
+                eprintln!("Warning: invalid address, skipping: {}", line);
+                return None;
+            }
+        };
+
+        let rw = match parts[2].to_uppercase().as_str() {
+            "R" => Rw::Read,
+            "W" => Rw::Write,
+            _ => {
+                eprintln!("Warning: invalid R/W type, skipping: {}", line);
+                return None;
+            }
+        };
+
+        let size = match parts[3].parse::<u64>() {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!("Warning: invalid size, skipping: {}", line);
+                return None;
+            }
+        };
+
+        let core_id = match parts[4].parse::<u32>() {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!("Warning: invalid core_id, skipping: {}", line);
+                return None;
+            }
+        };
+
+        Some(Access {
+            addr,
+            rw,
+            size,
+            core_id,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct NodeInfo {
+    label: String,
+    typ: String,
+    offset: i64,
+}
+
+#[derive(Debug, Default)]
+struct EdgeStat {
+    count1: u64,
+    count2: u64,
+    count3: u64,
+    count4: u64,
+    addr1: u64,
+    addr2: u64,
+}
+
+#[derive(Debug, Clone)]
+struct StructMember {
+    offset: u64,
+    name: String,
+    typ: String,
+}
+
+#[derive(Debug, Clone)]
+struct StructType {
+    name: String,
+    members: BTreeMap<u64, StructMember>,
+}
+
+#[derive(Debug, Clone)]
+struct GlobalVar {
+    name: String,
+    addr: u64,
+    typ: String,
+}
+
+fn parse_types(path: &str) -> HashMap<String, StructType> {
+    let mut map = HashMap::new();
+    if let Ok(file) = File::open(path) {
+        let reader = BufReader::new(file);
+        let mut current_struct: Option<StructType> = None;
+
+        for line in reader.lines().flatten() {
+            if line.starts_with('\t') {
+                if let Some(ref mut st) = current_struct {
+                    let parts: Vec<&str> = line.trim_start().split('\t').collect();
+                    if parts.len() >= 3 {
+                        let offset: u64 = parts[0].parse().unwrap_or(0);
+                        let name = parts[1].to_string();
+                        let typ = parts[2].trim_matches('\'').to_string();
+                        st.members.insert(offset, StructMember { offset, name, typ });
+                    }
+                }
+            } else {
+                if let Some(st) = current_struct.take() {
+                    map.insert(st.name.clone(), st);
+                }
+                let name = line.trim().to_string();
+                if !name.is_empty() {
+                    current_struct = Some(StructType {
+                        name,
+                        members: BTreeMap::new(),
+                    });
+                }
+            }
+        }
+        if let Some(st) = current_struct {
+            map.insert(st.name.clone(), st);
+        }
+    }
+    map
+}
+
+fn parse_vars(path: &str) -> BTreeMap<u64, GlobalVar> {
+    let mut map = BTreeMap::new();
+    if let Ok(file) = File::open(path) {
+        let reader = BufReader::new(file);
+        for line in reader.lines().flatten() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 3 {
+                let name = parts[0].to_string();
+                let addr: u64 = parts[1].parse().unwrap_or(0);
+                let typ = parts[2].trim_matches('\'').to_string();
+                map.insert(addr, GlobalVar { name, addr, typ });
+            }
+        }
+    }
+    map
+}
+
+fn resolve_access(
+    addr: u64,
+    vars: &BTreeMap<u64, GlobalVar>,
+    types: &HashMap<String, StructType>,
+) -> Option<NodeInfo> {
+    if let Some((&var_addr, var)) = vars.range(..=addr).next_back() {
+        if addr - var_addr < 1024 * 1024 * 10 { // 10MB sanity check
+            let delta = addr - var_addr;
+            let mut label = var.name.clone();
+            let mut typ = var.typ.clone();
+
+            if let Some(st) = types.get(&var.typ) {
+                if let Some((_, m)) = st.members.range(..=delta).next_back() {
+                    label = format!("{}.{}", label, m.name);
+                    typ = m.typ.clone();
+                }
+            }
+
+            return Some(NodeInfo {
+                label,
+                typ,
+                offset: delta as i64,
+            });
+        }
+    }
+    None
+}
+
+fn escape_dot_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn main() {
+    let config = parse_args();
+
+    let temp_dir = std::env::temp_dir();
+    let type_out_path = temp_dir.join(format!("dbg_type_{}.out", std::process::id()));
+    let var_out_path = temp_dir.join(format!("dbg_var_{}.out", std::process::id()));
+    let type_out = type_out_path.to_str().unwrap();
+    let var_out = var_out_path.to_str().unwrap();
+
+    println!("Running dbg-viewtype to dump DWARF info...");
+    let status = Command::new(&config.dbg_viewtype)
+        .arg(&config.binary)
+        .arg(type_out)
+        .arg(var_out)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            println!("dbg-viewtype finished successfully.");
+        }
+        Ok(s) => {
+            eprintln!("Warning: dbg-viewtype exited with status {}", s);
+        }
+        Err(e) => {
+            eprintln!("Warning: failed to execute dbg-viewtype: {}", e);
+        }
+    }
+
+    let types_map = parse_types(type_out);
+    let vars_map = parse_vars(var_out);
+
+    // Clean up the temporary files so they don't pollute the repository
+    let _ = std::fs::remove_file(type_out);
+    let _ = std::fs::remove_file(var_out);
+
+    let file = File::open(&config.input).unwrap_or_else(|e| {
+        eprintln!("Error opening input file: {}", e);
+        exit(1);
+    });
+    let reader = BufReader::new(file);
+
+    let mut node_map: HashMap<String, NodeInfo> = HashMap::new();
+    let mut edge_map: HashMap<(String, String), EdgeStat> = HashMap::new();
+
+    let mut prev_valid: Option<(Access, NodeInfo)> = None;
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        if let Some(curr_acc) = Access::parse(line) {
+            if let Some(curr_info) = resolve_access(curr_acc.addr, &vars_map, &types_map) {
+                node_map
+                    .entry(curr_info.label.clone())
+                    .or_insert_with(|| curr_info.clone());
+
+                if let Some((prev_acc, prev_info)) = &prev_valid {
+                    let mut label1 = prev_info.label.clone();
+                    let mut label2 = curr_info.label.clone();
+                    let mut addr1 = prev_acc.addr;
+                    let mut addr2 = curr_acc.addr;
+
+                    if label1 > label2 {
+                        std::mem::swap(&mut label1, &mut label2);
+                        std::mem::swap(&mut addr1, &mut addr2);
+                    }
+
+                    let stat = edge_map.entry((label1, label2)).or_default();
+                    stat.addr1 = addr1;
+                    stat.addr2 = addr2;
+
+                    let same_line = (prev_acc.addr / config.cache_line_size)
+                        == (curr_acc.addr / config.cache_line_size);
+
+                    if prev_acc.core_id != curr_acc.core_id {
+                        if prev_acc.rw == Rw::Write {
+                            if same_line {
+                                stat.count1 += 1;
+                            } else {
+                                stat.count2 += 1;
+                            }
+                        } else {
+                            stat.count3 += 1;
+                        }
+                    } else {
+                        stat.count4 += 1;
+                    }
+                }
+                prev_valid = Some((curr_acc, curr_info));
+            } else {
+                eprintln!("Warning: could not resolve label for addr 0x{:x}", curr_acc.addr);
+            }
+        }
+    }
+
+    let mut out = File::create(&config.output).unwrap_or_else(|e| {
+        eprintln!("Error creating output file: {}", e);
+        exit(1);
+    });
+
+    writeln!(out, "graph G {{").unwrap();
+    writeln!(out, "  node [shape=box];\n").unwrap();
+
+    let mut nodes: Vec<_> = node_map.values().collect();
+    nodes.sort_by(|a, b| a.label.cmp(&b.label));
+
+    for info in nodes {
+        writeln!(
+            out,
+            "  \"{}\" [label=\"{}\", type=\"{}\", offset={}];",
+            escape_dot_string(&info.label),
+            escape_dot_string(&info.label),
+            escape_dot_string(&info.typ),
+            info.offset
+        )
+        .unwrap();
+    }
+    writeln!(out, "").unwrap();
+
+    let mut edges: Vec<_> = edge_map.iter().collect();
+    edges.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+
+    for ((label1, label2), stat) in edges {
+        let alpha = stat.count1 + stat.count2;
+        let beta = stat.count3 + stat.count4;
+        let same_line = (stat.addr1 / config.cache_line_size) == (stat.addr2 / config.cache_line_size);
+        let alpha_kind = if same_line { "①" } else { "②" };
+
+        writeln!(
+            out,
+            "  \"{}\" -- \"{}\" [",
+            escape_dot_string(label1),
+            escape_dot_string(label2)
+        )
+        .unwrap();
+        writeln!(out, "    label=\"({},{})\",", alpha, beta).unwrap();
+        writeln!(out, "    alpha={},", alpha).unwrap();
+        writeln!(out, "    beta={},", beta).unwrap();
+        writeln!(out, "    count1={},", stat.count1).unwrap();
+        writeln!(out, "    count2={},", stat.count2).unwrap();
+        writeln!(out, "    count3={},", stat.count3).unwrap();
+        writeln!(out, "    count4={},", stat.count4).unwrap();
+        writeln!(out, "    alpha_kind=\"{}\"", alpha_kind).unwrap();
+        writeln!(out, "  ];").unwrap();
+    }
+
+    writeln!(out, "}}").unwrap();
+}
