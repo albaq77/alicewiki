@@ -638,8 +638,7 @@ int main() {
 	HCD2.enInterrupt();
 
 	HCD2.Start();// 内含 HPRT0.PPWR 驱动 VBUS
-	// 周期工作放主循环（参考实现也是这样），1kHz 的 SOF 中断就别开了
-	HCD2.GlobalReg(OTGGlobalReg::GINTMSK).rstof(USB_OTG_GINTMSK_SOFM_Pos);
+	// SOF 中断保留：卡住时只有它能让 ISR 定期进来查看通道挂起位
 
 	XART1.OutFormat("[USBH] Host controller started (HPRT0=0x%08X)\r\n", (unsigned)_USBH_HPRT0);
 	XART1.OutFormat("[USBH] Plug a USB keyboard into the HOST port.\r\n");

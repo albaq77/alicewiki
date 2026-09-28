@@ -183,62 +183,70 @@ static volatile byte mouse_btn = 0;
 // 阶段4：按键按下次数（左/右/中），Down 键快照打印
 static volatile uint32 mouse_click_cnt[3] = {};
 
-// ==================== 阶段6：屏幕光标 ====================
+// ==================== 阶段6：屏幕光标（LTDC 第 2 层） ====================
 #define CUR_W 16
 #define CUR_H 16
+#define CUR_WHITE 0xFFFF// ARGB1555 A=1 白
+#define CUR_BLACK 0x8000// ARGB1555 A=1 黑
+#define CUR_CLEAR 0x0000// ARGB1555 A=0 透明
 // 箭头形状：位15 = 最左像素，1 = 光标像素
 static const uint16 cur_shape[CUR_H] = {
 	0x8000, 0xC000, 0xE000, 0xF000, 0xF800, 0xFC00, 0xFE00, 0xFF00,
 	0xFF80, 0xFC00, 0xCC00, 0x0C00, 0x0600, 0x0600, 0x0300, 0x0300
 };
-static uint16 cur_img[CUR_W * CUR_H] = {};// 0 = 透明，不动背景
-static uint16 cur_bg[CUR_W * CUR_H] = {};// 光标下面的底色，移动前恢复
+// 贴图放在帧缓冲之后的空位（背景 800x480x2 = 768000 字节）
+static uint16* const cur_sprite = (uint16*)(SDRAM_BANK1_BASE + LCD_W * LCD_H * 2);
 static int32 cur_x = (LCD_W - CUR_W) / 2, cur_y = (LCD_H - CUR_H) / 2;
-static bool cur_drawn = false;
 // 位移队列：中断里入队、主循环出队，按屏坐标夹取，绕不过边界
 static volatile int8 cur_dq_x[32] = {}, cur_dq_y[32] = {};
 static volatile uint32 cur_dq_cnt = 0;
 
-static uint16* lcd_fb() { return (uint16*)SDRAM_BANK1_BASE; }
-
-// 预生成 16x16 贴图：白心 + 黑边，白底上也看得见
+// 预生成 16x16 贴图：白心 + 黑边，其余 A=0 全透明
 static void cursor_build() {
 	for (int y = 0; y < CUR_H; y++)
 		for (int x = 0; x < CUR_W; x++)
-			cur_img[y * CUR_W + x] = (cur_shape[y] & (0x8000u >> x)) ? 0xFFFF : 0;
+			cur_sprite[y * CUR_W + x] = (cur_shape[y] & (0x8000u >> x)) ? CUR_WHITE : CUR_CLEAR;
 	for (int y = 0; y < CUR_H; y++) {
 		for (int x = 0; x < CUR_W; x++) {
-			if (cur_img[y * CUR_W + x] != 0xFFFF) continue;
+			if (cur_sprite[y * CUR_W + x] != CUR_WHITE) continue;
 			for (int dy = -1; dy <= 1; dy++) {
 				for (int dx = -1; dx <= 1; dx++) {
 					const int nx = x + dx, ny = y + dy;
 					if (nx < 0 || ny < 0 || nx >= CUR_W || ny >= CUR_H) continue;
-					if (!cur_img[ny * CUR_W + nx]) cur_img[ny * CUR_W + nx] = 0x0000;
+					if (cur_sprite[ny * CUR_W + nx] == CUR_CLEAR) cur_sprite[ny * CUR_W + nx] = CUR_BLACK;
 				}
 			}
 		}
 	}
 }
 
-static void cursor_blit(int32 x, int32 y) {
-	uint16* fb = lcd_fb();
-	for (int j = 0; j < CUR_H; j++) {
-		for (int i = 0; i < CUR_W; i++) {
-			uint16* p = fb + (y + j) * LCD_W + (x + i);
-			cur_bg[j * CUR_W + i] = *p;
-			if (cur_img[j * CUR_W + i]) *p = cur_img[j * CUR_W + i];
-		}
-	}
+// 移动 = 只改这一层的窗口位置，不写显存
+static void cursor_place(int32 x, int32 y) {
+	cur_x = x;
+	cur_y = y;
+	const stduint hbp = LTDC[LTDCReg::BPCR].masof(16, 12);// AHBP
+	const stduint vbp = LTDC[LTDCReg::BPCR].masof(0, 12);// AVBP
+	LTDC[2][LTDCLayerReg::WHPCR] = (((stduint)(x + CUR_W) + hbp) << 16) | ((stduint)x + hbp + 1);
+	LTDC[2][LTDCLayerReg::WVPCR] = (((stduint)(y + CUR_H) + vbp) << 16) | ((stduint)y + vbp + 1);
+	LTDC.Reload(LTDCReload::Immediate);
 }
 
-static void cursor_erase(int32 x, int32 y) {
-	uint16* fb = lcd_fb();
-	for (int j = 0; j < CUR_H; j++)
-		for (int i = 0; i < CUR_W; i++)
-			fb[(y + j) * LCD_W + (x + i)] = cur_bg[j * CUR_W + i];
+// 把第 2 层配成 16x16 光标层：ARGB1555 逐像素 alpha，不需要色键
+static void cursor_layer_init() {
+	LTDC_LAYER_t::LayerPara lp{};
+	LTDC_LAYER_t::layer_param_refer(&lp);
+	lp.roleaddr = (pureptr_t)cur_sprite;
+	lp.window = Rectangle(Point(cur_x, cur_y), Size2(CUR_W, CUR_H));
+	lp.image_size = Size2(CUR_W, CUR_H);
+	lp.pixel_format = PixelFormat::ARGB1555;
+	lp.backcolor = Color::Black;// CACR.CONSTA = 255，只管乘到像素 alpha 上
+	lp.factor1_mode = true;// BF1 = 像素alpha x 常量alpha
+	lp.factor2_mode = true;// BF2 = 1 - 像素alpha x 常量alpha
+	LTDC[2].setMode(lp);
+	LTDC.Reload(LTDCReload::Immediate);
 }
 
-// 夹取到屏内，再擦旧画新
+// 夹取到屏内，再移动叠层
 static void cursor_move(int32 dx, int32 dy) {
 	int32 nx = cur_x + dx, ny = cur_y + dy;
 	if (nx < 0) nx = 0;
@@ -246,20 +254,12 @@ static void cursor_move(int32 dx, int32 dy) {
 	if (nx > LCD_W - CUR_W) nx = LCD_W - CUR_W;
 	if (ny > LCD_H - CUR_H) ny = LCD_H - CUR_H;
 	if (nx == cur_x && ny == cur_y) return;
-	if (cur_drawn) cursor_erase(cur_x, cur_y);
-	cur_x = nx;
-	cur_y = ny;
-	cursor_blit(cur_x, cur_y);
-	cur_drawn = true;
+	cursor_place(nx, ny);
 }
 
 // 回到屏幕中心
 static void cursor_reset() {
-	if (cur_drawn) cursor_erase(cur_x, cur_y);
-	cur_x = (LCD_W - CUR_W) / 2;
-	cur_y = (LCD_H - CUR_H) / 2;
-	cursor_blit(cur_x, cur_y);
-	cur_drawn = true;
+	cursor_place((LCD_W - CUR_W) / 2, (LCD_H - CUR_H) / 2);
 }
 
 // 中断里只记录，打印放在主循环
@@ -733,9 +733,13 @@ int main() {
 	// ---- 阶段5：先把屏点亮，USB 那条链路完全不动 ----
 	sdram_init();
 	ltdc_init();
+	// 第 1 层是 RGB565（没有像素 alpha），显式用"常量 alpha"混合，免得被算成全透明
+	LTDC[1][LTDCLayerReg::CACR] = 0xFF;// CONSTA 全不透明
+	LTDC[1][LTDCLayerReg::BFCR] = (0b100 << 8) | 0b101;// BF1=CA, BF2=1-CA
+	LTDC.Reload(LTDCReload::Immediate);
 	lcd_test_pattern();
 	cursor_build();
-	cursor_reset();
+	cursor_layer_init();
 	XART1.OutFormat("[LCD] LTDC OK, PixClk=%dHz\r\n", (int)LTDC.getFrequency());
 
 	XART1.OutFormat("\r\n");

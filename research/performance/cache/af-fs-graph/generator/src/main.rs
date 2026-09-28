@@ -263,6 +263,18 @@ fn parse_vars(path: &str) -> BTreeMap<u64, GlobalVar> {
     map
 }
 
+fn guess_base_size(type_str: &str) -> Option<u64> {
+    let t = type_str.replace("volatile", "").replace("const", "").replace(" ", "");
+    match t.as_str() {
+        "char" | "signedchar" | "unsignedchar" | "int8_t" | "uint8_t" => Some(1),
+        "short" | "unsignedshort" | "int16_t" | "uint16_t" => Some(2),
+        "int" | "unsignedint" | "int32_t" | "uint32_t" | "float" => Some(4),
+        "long" | "unsignedlong" | "longlong" | "unsignedlonglong" | "longint" | "unsignedlongint" | "int64_t" | "uint64_t" | "double" => Some(8),
+        _ if t.ends_with('*') => Some(8),
+        _ => None,
+    }
+}
+
 fn resolve_access(
     addr: u64,
     vars: &BTreeMap<u64, GlobalVar>,
@@ -273,18 +285,152 @@ fn resolve_access(
             let delta = addr - var_addr;
             let mut label = var.name.clone();
             let mut typ = var.typ.clone();
+            let mut final_offset = delta;
 
             if let Some(st) = types.get(&var.typ) {
-                if let Some((_, m)) = st.members.range(..=delta).next_back() {
+                if let Some((&m_offset, m)) = st.members.range(..=delta).next_back() {
+                    let mut member_delta = delta - m_offset;
                     label = format!("{}.{}", label, m.name);
                     typ = m.typ.clone();
+                    final_offset = member_delta;
+
+                    // Parse all array bounds: e.g. "int[10][20]" -> bounds = [10, 20]
+                    let mut bounds = Vec::new();
+                    let mut current_str = typ.as_str();
+                    while current_str.ends_with(']') {
+                        if let Some(start) = current_str.rfind('[') {
+                            let bound_str = &current_str[start + 1..current_str.len() - 1];
+                            if let Ok(b) = bound_str.parse::<u64>() {
+                                bounds.push(b);
+                                current_str = &current_str[..start];
+                            } else if bound_str.is_empty() {
+                                bounds.push(0);
+                                current_str = &current_str[..start];
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    bounds.reverse();
+
+                    if !bounds.is_empty() {
+                        let total_elements: u64 = bounds.iter().map(|&x| std::cmp::max(x, 1)).product();
+                        
+                        let mut total_size = 0;
+                        if let Some((&next_offset, _)) = st.members.range(m_offset + 1..).next() {
+                            total_size = next_offset - m_offset;
+                        }
+
+                        let mut elem_size = 0;
+                        if total_size > 0 && total_elements > 0 {
+                            elem_size = total_size / total_elements;
+                        }
+                        if elem_size == 0 {
+                            if let Some(guess) = guess_base_size(current_str) {
+                                elem_size = guess;
+                            }
+                        }
+
+                        if elem_size > 0 {
+                            let mut linear_index = member_delta / elem_size;
+                            member_delta = member_delta % elem_size;
+
+                            let mut indices = Vec::new();
+                            for &bound in bounds.iter().rev() {
+                                let dim_bound = std::cmp::max(bound, 1);
+                                indices.push(linear_index % dim_bound);
+                                linear_index /= dim_bound;
+                            }
+                            indices.reverse();
+
+                            for idx in indices {
+                                label = format!("{}[{}]", label, idx);
+                            }
+                        } else {
+                            if member_delta == 0 {
+                                for _ in 0..bounds.len() {
+                                    label = format!("{}[0]", label);
+                                }
+                            } else {
+                                label = format!("{}[?]+{}", label, member_delta);
+                                member_delta = 0;
+                            }
+                        }
+                    }
+
+                    if member_delta > 0 {
+                        label = format!("{}+{}", label, member_delta);
+                    }
+                }
+            } else {
+                // Global variable is an array itself?
+                let mut bounds = Vec::new();
+                let mut current_str = typ.as_str();
+                while current_str.ends_with(']') {
+                    if let Some(start) = current_str.rfind('[') {
+                        let bound_str = &current_str[start + 1..current_str.len() - 1];
+                        if let Ok(b) = bound_str.parse::<u64>() {
+                            bounds.push(b);
+                            current_str = &current_str[..start];
+                        } else if bound_str.is_empty() {
+                            bounds.push(0);
+                            current_str = &current_str[..start];
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                bounds.reverse();
+
+                if !bounds.is_empty() {
+                    let total_elements: u64 = bounds.iter().map(|&x| std::cmp::max(x, 1)).product();
+                    let mut elem_size = 0;
+                    if let Some(guess) = guess_base_size(current_str) {
+                        elem_size = guess;
+                    }
+                    
+                    let mut var_delta = delta;
+                    if elem_size > 0 {
+                        let mut linear_index = var_delta / elem_size;
+                        var_delta = var_delta % elem_size;
+
+                        let mut indices = Vec::new();
+                        for &bound in bounds.iter().rev() {
+                            let dim_bound = std::cmp::max(bound, 1);
+                            indices.push(linear_index % dim_bound);
+                            linear_index /= dim_bound;
+                        }
+                        indices.reverse();
+
+                        for idx in indices {
+                            label = format!("{}[{}]", label, idx);
+                        }
+                    } else {
+                        if var_delta == 0 {
+                            for _ in 0..bounds.len() {
+                                label = format!("{}[0]", label);
+                            }
+                        } else {
+                            label = format!("{}[?]+{}", label, var_delta);
+                            var_delta = 0;
+                        }
+                    }
+                    if var_delta > 0 {
+                        label = format!("{}+{}", label, var_delta);
+                    }
+                } else if delta > 0 {
+                    label = format!("{}+{}", label, delta);
                 }
             }
 
             return Some(NodeInfo {
                 label,
                 typ,
-                offset: delta as i64,
+                offset: final_offset as i64,
             });
         }
     }

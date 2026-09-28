@@ -1,0 +1,40 @@
+import sys
+
+with open("test_singles.cpp", "w", encoding="utf-8") as f:
+    f.write("#include <iostream>\n")
+    f.write("#include <thread>\n")
+    f.write("#include <vector>\n\n")
+    f.write("const int NUM_THREADS = 4;\n")
+    f.write("const int ITERATIONS = 100000;\n\n")
+
+    # 定义 320 个全局变量 (按 8 字节算，占用 40 个 Cacheline)
+    for i in range(320):
+        f.write(f"volatile long int g_var_{i};\n")
+    f.write("\n")
+
+    f.write("void worker(int thread_id) {\n")
+    f.write("    for (int iter = 0; iter < ITERATIONS; ++iter) {\n")
+    f.write("        if (thread_id == 0) {\n")
+    f.write("            " + " ".join([f"g_var_{i}++;" for i in range(320) if i % 8 == 0]) + "\n")
+    f.write("        } else if (thread_id == 1) {\n")
+    f.write("            " + " ".join([f"g_var_{i}++;" for i in range(320) if i % 8 == 1]) + "\n")
+    f.write("        } else if (thread_id == 2) {\n")
+    f.write("            " + " ".join([f"g_var_{i}++;" for i in range(320) if i % 8 == 2]) + "\n")
+    f.write("        } else if (thread_id == 3) {\n")
+    f.write("            " + " ".join([f"g_var_{i}++;" for i in range(320) if i % 8 == 3]) + "\n")
+    f.write("        }\n")
+    f.write("    }\n")
+    f.write("}\n\n")
+
+    f.write("int main() {\n")
+    f.write('    std::cout << "🚀 开始执行 320 个独立全局变量的乱序亲和性测试..." << std::endl;\n')
+    f.write("    std::vector<std::thread> threads;\n")
+    f.write("    for (int i = 0; i < NUM_THREADS; ++i) {\n")
+    f.write("        threads.emplace_back(worker, i);\n")
+    f.write("    }\n")
+    f.write("    for (auto& t : threads) {\n")
+    f.write("        t.join();\n")
+    f.write("    }\n")
+    f.write('    std::cout << "✅ 亲和性并发测试完成！" << std::endl;\n')
+    f.write("    return 0;\n")
+    f.write("}\n")
