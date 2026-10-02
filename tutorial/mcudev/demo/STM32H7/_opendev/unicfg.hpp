@@ -5,7 +5,8 @@
 */
 
 enum class DeviceType {
-	LTDC
+	LTDC,
+	DeviceCount
 };
 
 inline static bool ConfigDeviceGPIN(DeviceType dev) {

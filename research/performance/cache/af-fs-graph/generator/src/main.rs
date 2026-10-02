@@ -11,11 +11,12 @@ struct Config {
     binary: String,
     cache_line_size: u64,
     dbg_viewtype: String,
+    disable_self_weight: bool,
 }
 
 fn print_usage_and_exit(prog_name: &str) -> ! {
     eprintln!(
-        "Usage: {} -i <trace.csv> -o <graph.dot> --binary <app> [--cache-line-size <size>] [--dbg-viewtype <path>]",
+        "Usage: {} -i <trace.csv> -o <graph.dot> --binary <app> [--cache-line-size <size>] [--dbg-viewtype <path>] [--disable-self-weight]",
         prog_name
     );
     exit(1);
@@ -30,6 +31,7 @@ fn parse_args() -> Config {
     let mut binary = None;
     let mut cache_line_size = 64;
     let mut dbg_viewtype = "dbg-viewtype".to_string();
+    let mut disable_self_weight = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -73,6 +75,8 @@ fn parse_args() -> Config {
             } else {
                 print_usage_and_exit(&prog_name);
             }
+        } else if arg == "--disable-self-weight" {
+            disable_self_weight = true;
         } else {
             eprintln!("Unknown argument: {}", arg);
             print_usage_and_exit(&prog_name);
@@ -99,6 +103,7 @@ fn parse_args() -> Config {
         binary,
         cache_line_size,
         dbg_viewtype,
+        disable_self_weight,
     }
 }
 
@@ -199,6 +204,7 @@ struct StructMember {
 #[derive(Debug, Clone)]
 struct StructType {
     name: String,
+    size: u64,
     members: BTreeMap<u64, StructMember>,
 }
 
@@ -230,10 +236,14 @@ fn parse_types(path: &str) -> HashMap<String, StructType> {
                 if let Some(st) = current_struct.take() {
                     map.insert(st.name.clone(), st);
                 }
-                let name = line.trim().to_string();
-                if !name.is_empty() {
+                let line_trim = line.trim();
+                if !line_trim.is_empty() {
+                    let mut parts = line_trim.split('\t');
+                    let struct_name = parts.next().unwrap_or("").to_string();
+                    let size: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
                     current_struct = Some(StructType {
-                        name,
+                        name: struct_name,
+                        size,
                         members: BTreeMap::new(),
                     });
                 }
@@ -330,6 +340,8 @@ fn resolve_access(
                         if elem_size == 0 {
                             if let Some(guess) = guess_base_size(current_str) {
                                 elem_size = guess;
+                            } else if let Some(struct_info) = types.get(current_str) {
+                                elem_size = struct_info.size;
                             }
                         }
 
@@ -391,6 +403,8 @@ fn resolve_access(
                     let mut elem_size = 0;
                     if let Some(guess) = guess_base_size(current_str) {
                         elem_size = guess;
+                    } else if let Some(struct_info) = types.get(current_str) {
+                        elem_size = struct_info.size;
                     }
                     
                     let mut var_delta = delta;
@@ -408,6 +422,19 @@ fn resolve_access(
 
                         for idx in indices {
                             label = format!("{}[{}]", label, idx);
+                        }
+
+                        // Always try to resolve struct member even if var_delta is 0
+                        if let Some(st) = types.get(current_str) {
+                            if let Some((&m_offset, m)) = st.members.range(..=var_delta).next_back() {
+                                let member_delta = var_delta - m_offset;
+                                label = format!("{}.{}", label, m.name);
+                                
+                                if member_delta > 0 {
+                                    label = format!("{}+{}", label, member_delta);
+                                }
+                                var_delta = 0;
+                            }
                         }
                     } else {
                         if var_delta == 0 {
@@ -486,6 +513,7 @@ fn main() {
     let mut edge_map: HashMap<(String, String), EdgeStat> = HashMap::new();
 
     let mut prev_valid: Option<(Access, NodeInfo)> = None;
+    let mut warn_limit = 0;
 
     for line in reader.lines() {
         let line = match line {
@@ -537,61 +565,133 @@ fn main() {
                 }
                 prev_valid = Some((curr_acc, curr_info));
             } else {
-                eprintln!("Warning: could not resolve label for addr 0x{:x}", curr_acc.addr);
+                if warn_limit < 20 {
+                    eprintln!("Warning: could not resolve label for addr 0x{:x}", curr_acc.addr);
+                    warn_limit += 1;
+                    if warn_limit == 20 {
+                        eprintln!("Warning: could not resolve label for addr... (silencing further warnings)");
+                    }
+                }
             }
         }
     }
 
-    let mut out = File::create(&config.output).unwrap_or_else(|e| {
-        eprintln!("Error creating output file: {}", e);
-        exit(1);
-    });
+    let get_group = |label: &str| -> Option<String> {
+        if let Some(idx) = label.find('[') {
+            Some(label[..idx].to_string())
+        } else {
+            None
+        }
+    };
 
-    writeln!(out, "graph G {{").unwrap();
-    writeln!(out, "  node [shape=box];\n").unwrap();
-
-    let mut nodes: Vec<_> = node_map.values().collect();
-    nodes.sort_by(|a, b| a.label.cmp(&b.label));
-
-    for info in nodes {
-        writeln!(
-            out,
-            "  \"{}\" [label=\"{}\", type=\"{}\", offset={}];",
-            escape_dot_string(&info.label),
-            escape_dot_string(&info.label),
-            escape_dot_string(&info.typ),
-            info.offset
-        )
-        .unwrap();
-    }
-    writeln!(out, "").unwrap();
-
-    let mut edges: Vec<_> = edge_map.iter().collect();
-    edges.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
-
-    for ((label1, label2), stat) in edges {
-        let alpha = stat.count1 + stat.count2;
-        let beta = stat.count3 + stat.count4;
-        let same_line = (stat.addr1 / config.cache_line_size) == (stat.addr2 / config.cache_line_size);
-        let alpha_kind = if same_line { "①" } else { "②" };
-
-        writeln!(
-            out,
-            "  \"{}\" -- \"{}\" [",
-            escape_dot_string(label1),
-            escape_dot_string(label2)
-        )
-        .unwrap();
-        writeln!(out, "    label=\"({},{})\",", alpha, beta).unwrap();
-        writeln!(out, "    alpha={},", alpha).unwrap();
-        writeln!(out, "    beta={},", beta).unwrap();
-        writeln!(out, "    count1={},", stat.count1).unwrap();
-        writeln!(out, "    count2={},", stat.count2).unwrap();
-        writeln!(out, "    count3={},", stat.count3).unwrap();
-        writeln!(out, "    count4={},", stat.count4).unwrap();
-        writeln!(out, "    alpha_kind=\"{}\"", alpha_kind).unwrap();
-        writeln!(out, "  ];").unwrap();
+    let mut groups: std::collections::HashSet<Option<String>> = std::collections::HashSet::new();
+    for info in node_map.values() {
+        groups.insert(get_group(&info.label));
     }
 
-    writeln!(out, "}}").unwrap();
+    let out_path = std::path::Path::new(&config.output);
+    let parent = out_path.parent().unwrap_or_else(|| std::path::Path::new(""));
+    let stem = out_path.file_stem().unwrap_or_default().to_str().unwrap_or_default();
+    let ext = out_path.extension().unwrap_or_default().to_str().unwrap_or_default();
+    let ext_with_dot = if ext.is_empty() { String::new() } else { format!(".{}", ext) };
+
+    for group_opt in groups {
+        let output_file_path = match &group_opt {
+            Some(arr_name) => {
+                let mut p = parent.to_path_buf();
+                p.push(format!("{}.{}{}", stem, arr_name, ext_with_dot));
+                p
+            }
+            None => out_path.to_path_buf(),
+        };
+
+        let mut group_edges = Vec::new();
+        let mut group_nodes_set = std::collections::HashSet::new();
+
+        for ((l1, l2), stat) in &edge_map {
+            let g1 = get_group(l1);
+            let g2 = get_group(l2);
+
+            let include_edge = if group_opt.is_none() {
+                g1.is_none() && g2.is_none()
+            } else {
+                g1 == group_opt || g2 == group_opt
+            };
+
+            if include_edge {
+                group_edges.push(((l1.clone(), l2.clone()), stat.clone()));
+                group_nodes_set.insert(l1.clone());
+                group_nodes_set.insert(l2.clone());
+            }
+        }
+
+        for info in node_map.values() {
+            if get_group(&info.label) == group_opt {
+                group_nodes_set.insert(info.label.clone());
+            }
+        }
+
+        if group_nodes_set.is_empty() {
+            continue;
+        }
+
+        let mut out = File::create(&output_file_path).unwrap_or_else(|e| {
+            eprintln!("Error creating output file: {}", e);
+            exit(1);
+        });
+
+        writeln!(out, "graph G {{").unwrap();
+        writeln!(out, "  node [shape=box];\n").unwrap();
+
+        let mut nodes: Vec<_> = group_nodes_set
+            .into_iter()
+            .filter_map(|lbl| node_map.get(&lbl))
+            .collect();
+        nodes.sort_by(|a, b| a.label.cmp(&b.label));
+
+        for info in nodes {
+            writeln!(
+                out,
+                "  \"{}\" [label=\"{}\", type=\"{}\", offset={}];",
+                escape_dot_string(&info.label),
+                escape_dot_string(&info.label),
+                escape_dot_string(&info.typ),
+                info.offset
+            )
+            .unwrap();
+        }
+        writeln!(out, "").unwrap();
+
+        group_edges.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+
+        for ((label1, label2), stat) in group_edges {
+            if config.disable_self_weight && label1 == label2 {
+                continue;
+            }
+
+            let alpha = stat.count1 + stat.count2;
+            let beta = stat.count3 + stat.count4;
+            let same_line = (stat.addr1 / config.cache_line_size) == (stat.addr2 / config.cache_line_size);
+            let alpha_kind = if same_line { "①" } else { "②" };
+
+            writeln!(
+                out,
+                "  \"{}\" -- \"{}\" [",
+                escape_dot_string(&label1),
+                escape_dot_string(&label2)
+            )
+            .unwrap();
+            writeln!(out, "    label=\"({},{})\",", alpha, beta).unwrap();
+            writeln!(out, "    alpha={},", alpha).unwrap();
+            writeln!(out, "    beta={},", beta).unwrap();
+            writeln!(out, "    count1={},", stat.count1).unwrap();
+            writeln!(out, "    count2={},", stat.count2).unwrap();
+            writeln!(out, "    count3={},", stat.count3).unwrap();
+            writeln!(out, "    count4={},", stat.count4).unwrap();
+            writeln!(out, "    alpha_kind=\"{}\"", alpha_kind).unwrap();
+            writeln!(out, "  ];").unwrap();
+        }
+
+        writeln!(out, "}}").unwrap();
+    }
 }

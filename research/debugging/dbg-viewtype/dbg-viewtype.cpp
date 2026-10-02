@@ -26,6 +26,7 @@ struct DieInfo {
     std::vector<Dwarf_Off> children; // 子节点偏移列表
 
 	Dwarf_Signed upper_bound = -1;// 存储数组的最大索引 'Arr[MAX]'
+    Dwarf_Unsigned byte_size = 0;   // 结构体或类型的总字节数 (DW_AT_byte_size)
 };
 
 // 全局的 DIE 映射表：Key 为全局偏移量
@@ -96,7 +97,13 @@ void process_die_data(Dwarf_Debug dbg, Dwarf_Die die, DieInfo& info) {
 		}
 	}
 
-	// 4. 提取全局变量的内存地址 (DW_AT_location 中的 DW_OP_addr)
+    // 4. 获取结构体或类型的总字节数 (DW_AT_byte_size)
+    if (dwarf_attr(die, DW_AT_byte_size, &attr, &err) == DW_DLV_OK) {
+        dwarf_formudata(attr, &info.byte_size, &err);
+        dwarf_dealloc(dbg, attr, DW_DLA_ATTR);
+    }
+
+	// 5. 提取全局变量的内存地址 (DW_AT_location 中的 DW_OP_addr)
 	if (info.tag == DW_TAG_variable) {
 		if (dwarf_attr(die, DW_AT_location, &attr, &err) == DW_DLV_OK) {
 			Dwarf_Loc_Head_c loc_head = nullptr;
@@ -150,16 +157,27 @@ void process_die_data(Dwarf_Debug dbg, Dwarf_Die die, DieInfo& info) {
 		}
 	}
 
-	// 5. 提取数组的子范围上界 (DW_AT_upper_bound)
+	// 5. 提取数组的子范围上界 (DW_AT_upper_bound) 或者个数 (DW_AT_count)
 	if (info.tag == DW_TAG_subrange_type) {
 		if (dwarf_attr(die, DW_AT_upper_bound, &attr, &err) == DW_DLV_OK) {
-			Dwarf_Unsigned bound = 0;
-			// 获取无符号整数值 (128大小的数组，上界通常是127)
-			if (dwarf_formudata(attr, &bound, &err) == DW_DLV_OK) {
-				info.upper_bound = bound;
-			}
+			Dwarf_Unsigned bound_u = 0;
+            Dwarf_Signed bound_s = 0;
+			if (dwarf_formudata(attr, &bound_u, &err) == DW_DLV_OK) {
+				info.upper_bound = bound_u;
+			} else if (dwarf_formsdata(attr, &bound_s, &err) == DW_DLV_OK) {
+                info.upper_bound = bound_s;
+            }
 			dwarf_dealloc(dbg, attr, DW_DLA_ATTR);
-		}
+		} else if (dwarf_attr(die, DW_AT_count, &attr, &err) == DW_DLV_OK) {
+            Dwarf_Unsigned count_u = 0;
+            Dwarf_Signed count_s = 0;
+			if (dwarf_formudata(attr, &count_u, &err) == DW_DLV_OK) {
+				info.upper_bound = count_u - 1;
+			} else if (dwarf_formsdata(attr, &count_s, &err) == DW_DLV_OK) {
+                info.upper_bound = count_s - 1;
+            }
+			dwarf_dealloc(dbg, attr, DW_DLA_ATTR);
+        }
 	}
 }
 
@@ -395,7 +413,7 @@ int main(int argc, char* argv[]) {
 	for (auto const& [offset, info] : die_map) {
 		// 如果是结构体，并且有名字
 		if (info.tag == DW_TAG_structure_type && !info.name.empty()) {
-			pout->OutFormat("%s\n", info.name.c_str());
+			pout->OutFormat("%s\t%llu\n", info.name.c_str(), info.byte_size);
 			print_struct_members_recursively(*pout, offset, 0, "");
 		}
 	}

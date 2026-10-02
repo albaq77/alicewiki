@@ -937,3 +937,5 @@ int main() {
 		}
 	}
 }
+
+OstreamTrait* con0_out = 0;
