@@ -3,6 +3,15 @@
 
 uni::Mempool mempool;
 
+// AKA the allocator the USB/xHCI code allocates through: on this board the host environment
+// is the mempool. It is assigned, not defined: the library already defines the pointer.
+namespace {
+	struct HostenvAllocatorBinder {
+		HostenvAllocatorBinder() { uni_hostenv_allocator = &mempool; }
+	};
+	HostenvAllocatorBinder hostenv_allocator_binder;
+}
+
 
 void* operator new(size_t size) { return mempool.allocate(size, 3, 0); }
 void* operator new[](size_t size)            { return mempool.allocate(size, 3, 0); }

@@ -7,6 +7,8 @@ using namespace uni;
 GPIN& LEDB = GPIOB[0];
 GPIN& LEDR = GPIOB[1];
 
+stduint con0_out;
+
 int main() {
 	LEDB.setMode(GPIOMode::OUT);
 	LEDR.setMode(GPIOMode::OUT);
