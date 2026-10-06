@@ -1,4 +1,9 @@
 
+// 是否让 SD 卡按块读取走 SDMMC 内部 DMA（阻塞式封装 ReadDMA_Blocking）。
+#ifndef IMAGE_CARD_USE_DMA
+#define IMAGE_CARD_USE_DMA 0
+#endif
+
 #if IMAGE_PROFILE
 struct ImageProfile {
 	stduint card_read_call_count;
@@ -41,9 +46,10 @@ struct ImageCardCacheEntry {
 	uint32 age;
 };
 
+// 32B 对齐：内部 DMA 与 D-cache 维护都按 cache line 操作（Cortex-M7 行宽 32B）。
 static ImageCardCacheEntry image_card_cache[IMAGE_CARD_CACHE_BLOCKS];
-static byte image_card_cache_data[IMAGE_CARD_CACHE_BYTES];
-static byte image_card_readahead_data[IMAGE_CARD_READAHEAD_BYTES];
+alignas(32) static byte image_card_cache_data[IMAGE_CARD_CACHE_BYTES];
+alignas(32) static byte image_card_readahead_data[IMAGE_CARD_READAHEAD_BYTES];
 
 class CachedStorageDevice : public StorageTrait {
 private:
@@ -77,7 +83,12 @@ private:
 #if IMAGE_PROFILE
 		uint64 t0 = profile_now();
 #endif
+#if IMAGE_CARD_USE_DMA
+		// 阻塞式内部 DMA：返回时数据已搬完，且已做过 D-cache 维护
+		bool ok = storage->ReadDMA_Blocking(data, block, count, IMAGE_CARD_READ_TIMEOUT_MS, nullptr);
+#else
 		bool ok = storage->Read(data, block, count, IOMethod::Loop, IMAGE_CARD_READ_TIMEOUT_MS, nullptr);
+#endif
 #if IMAGE_PROFILE
 		image_profile.card_read_call_count++;
 		if (ok) {

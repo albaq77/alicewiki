@@ -785,3 +785,5 @@ int main() {
 		}
 	}
 }
+
+stduint con0_out = 0;

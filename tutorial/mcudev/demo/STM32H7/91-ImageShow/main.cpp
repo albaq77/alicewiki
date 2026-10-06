@@ -25,6 +25,7 @@
 #include <c/format/picture/BMP.h>
 #include <c/mempool.h>
 #include <cpp/Device/DBG>
+#include <c/prochip/CortexM7.h>// __DSB / __ISB（MPU 用）
 #include "../_opendev/RGB-LCD.hpp"
 extern "C" char _IDN_BOARD[16] {"STM32H743IIT6"};
 
@@ -51,6 +52,27 @@ void outtxt(const char* str, stduint len) {XART1.out(str, len);}
 #define SRAM12_ADDR ((stduint)0x30000000)
 #define SRAM4_ADDR  ((stduint)0x38000000)
 
+// Cortex-M7 默认内存映射把 0xC0000000 当 Device：非对齐访问必挂，且每次访问都要等 SDRAM 完成。
+// 这里把 SDRAM 低 16MB 配成 Normal 非缓存（帧缓冲、SD/FAT 缓冲、mempool 全在里面），
+// 非缓存态与 LTDC/DMA2D/MDMA/SD-DMA 天然一致，不需要任何 cache 维护。
+#define _MPU_CTRL_ADDR 0xE000ED94
+#define _MPU_RNR_ADDR  0xE000ED98
+#define _MPU_RBAR_ADDR 0xE000ED9C
+#define _MPU_RASR_ADDR 0xE000EDA0
+// RASR: ENABLE(0) | SIZE=23(16MB) | TEX=001 | AP=0x03(24, 全权限)，C=0 B=0 即 Normal 非缓存
+#define _MPU_RASR_SDRAM_NC ((1u << 0) | (23u << 1) | (1u << 19) | (3u << 24))
+
+static void mpu_sdram_init() {
+	Reference(_MPU_CTRL_ADDR).rstof(0);// 先关 MPU 再改 region
+	__DSB();
+	Reference(_MPU_RNR_ADDR) = 0;
+	Reference(_MPU_RBAR_ADDR) = SDRAM_BANK1_BASE;
+	Reference(_MPU_RASR_ADDR) = _MPU_RASR_SDRAM_NC;
+	Reference(_MPU_CTRL_ADDR) = (1u << 0) | (1u << 2);// ENABLE | PRIVDEFENA
+	__DSB();
+	__ISB();
+}
+
 #define IMAGE_CARD_BLOCK_SIZE 512
 #define IMAGE_FILE_BLOCK_SIZE IMAGE_CARD_BLOCK_SIZE
 #define PNG_FILE_BLOCK_SIZE 4096
@@ -59,9 +81,12 @@ void outtxt(const char* str, stduint len) {XART1.out(str, len);}
 #define IMAGE_CARD_CACHE_BLOCKS 32
 #define IMAGE_CARD_CACHE_BYTES (IMAGE_CARD_BLOCK_SIZE * IMAGE_CARD_CACHE_BLOCKS)
 #define IMAGE_CARD_CACHE_INVALID_BLOCK ((stduint)-1)
-#define IMAGE_CARD_READAHEAD 0 // !!
+#define IMAGE_CARD_READAHEAD 1
 #define IMAGE_CARD_READAHEAD_BLOCKS 8
 #define IMAGE_CARD_READ_TIMEOUT_MS 1000
+// 1: SD 按块读取走 SDMMC 内部 DMA（阻塞式 ReadDMA_Blocking，含完成等待 + D-cache 维护）
+// 0: 轮询（IOMethod::Loop，原行为）
+#define IMAGE_CARD_USE_DMA 0
 #define IMAGE_CARD_READAHEAD_BYTES (IMAGE_CARD_BLOCK_SIZE * IMAGE_CARD_READAHEAD_BLOCKS)
 #define IMAGE_FAT_BUFFER_SIZE IMAGE_CARD_BLOCK_SIZE
 #if IMAGE_CARD_READAHEAD_BLOCKS > IMAGE_CARD_CACHE_BLOCKS
@@ -215,6 +240,7 @@ static void on_key_prev() { key_event = 2; }// KEYL：上一张
 static void on_key_enum(){ key_event = 3; }// KEYU：重新枚举
 
 int main() {
+	mpu_sdram_init();// 必须早于 L1C.enAble()，否则 cache line 按旧属性分配
 	L1C.enAble();// I+D cache 全开（照 20-LTDC-DMA2D：SDRAM + LTDC + DMA2D 场景）
 	NVIC.setPriorityGroup(2);
 	if (!RCC.setClock(SysclkSource::HSE)) erro();
@@ -258,6 +284,9 @@ int main() {
 		while (1) { SysDelay_ms(1000); }
 	}
 	SDCard1.Block_Size = IMAGE_CARD_BLOCK_SIZE;
+#if IMAGE_CARD_USE_DMA
+	SDCard1.storage_method = IOMethod::DMA;// StorageTrait 路径走阻塞式内部 DMA
+#endif
 
 	// 挂载 FAT
 #if IMAGE_CARD_CACHE

@@ -247,6 +247,8 @@ Reset_Handler    PROC
                  EXPORT  Reset_Handler                    [WEAK]
         IMPORT  SystemInit
         IMPORT  __main
+                IMPORT  SDMMC1_IRQHandler
+                IMPORT  SDMMC2_IRQHandler
 
                  LDR     R0, =SystemInit
                  BLX     R0
@@ -345,7 +347,6 @@ Default_Handler PROC
                 EXPORT  TIM8_CC_IRQHandler                [WEAK]                                   
                 EXPORT  DMA1_Stream7_IRQHandler           [WEAK]                                          
                 EXPORT  FMC_IRQHandler                    [WEAK]                                             
-                EXPORT  SDMMC1_IRQHandler                 [WEAK]                                             
                 EXPORT  TIM5_IRQHandler                   [WEAK]                                             
                 EXPORT  SPI3_IRQHandler                   [WEAK]                                             
                 EXPORT  UART4_IRQHandler                  [WEAK]                                            
@@ -414,7 +415,6 @@ Default_Handler PROC
                 EXPORT  MDIOS_IRQHandler                  [WEAK]                                              
                 EXPORT  JPEG_IRQHandler                   [WEAK]                                               
                 EXPORT  MDMA_IRQHandler                   [WEAK]                                                                                             
-                EXPORT  SDMMC2_IRQHandler                 [WEAK]                                             
                 EXPORT  HSEM1_IRQHandler                  [WEAK]                                                                                                             
                 EXPORT  ADC3_IRQHandler                   [WEAK]                                                
                 EXPORT  DMAMUX2_OVR_IRQHandler            [WEAK]                                            
@@ -484,8 +484,7 @@ TIM8_UP_TIM13_IRQHandler
 TIM8_TRG_COM_TIM14_IRQHandler  
 TIM8_CC_IRQHandler                                               
 DMA1_Stream7_IRQHandler                                                 
-FMC_IRQHandler                                                            
-SDMMC1_IRQHandler                                                            
+FMC_IRQHandler                                                                                                                        
 TIM5_IRQHandler                                                            
 SPI3_IRQHandler                                                            
 UART4_IRQHandler                                                          
@@ -553,8 +552,7 @@ TIM17_IRQHandler
 MDIOS_WKUP_IRQHandler                                                              
 MDIOS_IRQHandler                                                                    
 JPEG_IRQHandler                                                                      
-MDMA_IRQHandler                                                                                                                                            
-SDMMC2_IRQHandler                                                                  
+MDMA_IRQHandler                                                                                                                                                                                                              
 HSEM1_IRQHandler                                                                                                                                       
 ADC3_IRQHandler                                                                       
 DMAMUX2_OVR_IRQHandler                                                            
