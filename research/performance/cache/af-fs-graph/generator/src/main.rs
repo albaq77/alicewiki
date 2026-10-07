@@ -177,11 +177,12 @@ impl Access {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct NodeInfo {
     label: String,
     typ: String,
     offset: i64,
+    struct_name: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -296,6 +297,8 @@ fn resolve_access(
             let mut label = var.name.clone();
             let mut typ = var.typ.clone();
             let mut final_offset = delta;
+            let mut resolved_struct_name = None;
+            let mut resolved_field_name = None;
 
             if let Some(st) = types.get(&var.typ) {
                 if let Some((&m_offset, m)) = st.members.range(..=delta).next_back() {
@@ -303,6 +306,10 @@ fn resolve_access(
                     label = format!("{}.{}", label, m.name);
                     typ = m.typ.clone();
                     final_offset = member_delta;
+                    resolved_struct_name = Some(st.name.clone());
+                    let mut fname = m.name.clone();
+                    if member_delta > 0 { fname = format!("{}+{}", fname, member_delta); }
+                    resolved_field_name = Some(fname);
 
                     // Parse all array bounds: e.g. "int[10][20]" -> bounds = [10, 20]
                     let mut bounds = Vec::new();
@@ -429,6 +436,8 @@ fn resolve_access(
                             if let Some((&m_offset, m)) = st.members.range(..=var_delta).next_back() {
                                 let member_delta = var_delta - m_offset;
                                 label = format!("{}.{}", label, m.name);
+                                typ = m.typ.clone();
+                                resolved_struct_name = Some(st.name.clone());
                                 
                                 if member_delta > 0 {
                                     label = format!("{}+{}", label, member_delta);
@@ -454,11 +463,21 @@ fn resolve_access(
                 }
             }
 
-            return Some(NodeInfo {
-                label,
-                typ,
-                offset: final_offset as i64,
-            });
+            if let (Some(s_name), Some(f_name)) = (resolved_struct_name.clone(), resolved_field_name) {
+                return Some(NodeInfo {
+                    label: format!("{}::{}", s_name, f_name),
+                    typ,
+                    offset: final_offset as i64,
+                    struct_name: Some(s_name),
+                });
+            } else {
+                return Some(NodeInfo {
+                    label,
+                    typ,
+                    offset: final_offset as i64,
+                    struct_name: resolved_struct_name, // Fix: Preserve struct_name even if it's an array instance
+                });
+            }
         }
     }
     None
@@ -576,17 +595,22 @@ fn main() {
         }
     }
 
-    let get_group = |label: &str| -> Option<String> {
-        if let Some(idx) = label.find('[') {
-            Some(label[..idx].to_string())
-        } else {
-            None
-        }
-    };
+
 
     let mut groups: std::collections::HashSet<Option<String>> = std::collections::HashSet::new();
     for info in node_map.values() {
-        groups.insert(get_group(&info.label));
+        let mut added = false;
+        if let Some(sname) = &info.struct_name {
+            groups.insert(Some(format!("{}.fields", sname)));
+            added = true;
+        }
+        if let Some(idx) = info.label.find('[') {
+            groups.insert(Some(info.label[..idx].to_string()));
+            added = true;
+        }
+        if !added {
+            groups.insert(None);
+        }
     }
 
     let out_path = std::path::Path::new(&config.output);
@@ -609,14 +633,26 @@ fn main() {
         let mut group_nodes_set = std::collections::HashSet::new();
 
         for ((l1, l2), stat) in &edge_map {
-            let g1 = get_group(l1);
-            let g2 = get_group(l2);
-
-            let include_edge = if group_opt.is_none() {
-                g1.is_none() && g2.is_none()
-            } else {
-                g1 == group_opt || g2 == group_opt
+            let info1 = node_map.get(l1).unwrap();
+            let info2 = node_map.get(l2).unwrap();
+            let belongs_to = |info: &NodeInfo, l: &str, g_opt: &Option<String>| -> bool {
+                match g_opt {
+                    None => info.struct_name.is_none() && !l.contains('['),
+                    Some(ref g) => {
+                        if g.ends_with(".fields") {
+                            if let Some(sname) = &info.struct_name {
+                                if g == &format!("{}.fields", sname) { return true; }
+                            }
+                        } else {
+                            if let Some(idx) = l.find('[') {
+                                if g == &l[..idx] { return true; }
+                            }
+                        }
+                        false
+                    }
+                }
             };
+            let include_edge = belongs_to(info1, l1, &group_opt) || belongs_to(info2, l2, &group_opt);
 
             if include_edge {
                 group_edges.push(((l1.clone(), l2.clone()), stat.clone()));
@@ -625,9 +661,26 @@ fn main() {
             }
         }
 
-        for info in node_map.values() {
-            if get_group(&info.label) == group_opt {
-                group_nodes_set.insert(info.label.clone());
+        let belongs_to2 = |info: &NodeInfo, l: &str, g_opt: &Option<String>| -> bool {
+            match g_opt {
+                None => info.struct_name.is_none() && !l.contains('['),
+                Some(ref g) => {
+                    if g.ends_with(".fields") {
+                        if let Some(sname) = &info.struct_name {
+                            if g == &format!("{}.fields", sname) { return true; }
+                        }
+                    } else {
+                        if let Some(idx) = l.find('[') {
+                            if g == &l[..idx] { return true; }
+                        }
+                    }
+                    false
+                }
+            }
+        };
+        for (lbl, info) in &node_map {
+            if belongs_to2(info, lbl, &group_opt) {
+                group_nodes_set.insert(lbl.clone());
             }
         }
 
@@ -637,16 +690,38 @@ fn main() {
 
         let mut out = File::create(&output_file_path).unwrap_or_else(|e| {
             eprintln!("Error creating output file: {}", e);
-            exit(1);
+            std::process::exit(1);
         });
 
         writeln!(out, "graph G {{").unwrap();
         writeln!(out, "  node [shape=box];\n").unwrap();
 
-        let mut nodes: Vec<_> = group_nodes_set
-            .into_iter()
-            .filter_map(|lbl| node_map.get(&lbl))
-            .collect();
+        let abstract_label = |lbl: String, info: &NodeInfo| -> String {
+            if let Some(ref g) = group_opt {
+                if g.ends_with(".fields") {
+                    if let Some(ref info_sname) = info.struct_name {
+                        if let Some(idx) = lbl.rfind('.') {
+                            return format!("{}::{}", info_sname, &lbl[idx + 1..]);
+                        }
+                    }
+                }
+            }
+            lbl
+        };
+
+        let mut abstract_nodes: std::collections::HashMap<String, NodeInfo> = std::collections::HashMap::new();
+        for lbl in group_nodes_set {
+            if let Some(info) = node_map.get(&lbl) {
+                let albl = abstract_label(lbl.clone(), info);
+                if !abstract_nodes.contains_key(&albl) {
+                    let mut ainfo = info.clone();
+                    ainfo.label = albl.clone();
+                    abstract_nodes.insert(albl, ainfo);
+                }
+            }
+        }
+
+        let mut nodes: Vec<_> = abstract_nodes.into_values().collect();
         nodes.sort_by(|a, b| a.label.cmp(&b.label));
 
         for info in nodes {
@@ -662,9 +737,35 @@ fn main() {
         }
         writeln!(out, "").unwrap();
 
-        group_edges.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+        let mut aggregated_edges: std::collections::HashMap<(String, String), EdgeStat> = std::collections::HashMap::new();
+        for ((l1, l2), stat) in group_edges {
+            let info1 = node_map.get(&l1).unwrap();
+            let info2 = node_map.get(&l2).unwrap();
+            let al1 = abstract_label(l1.clone(), info1);
+            let al2 = abstract_label(l2.clone(), info2);
+            
+            let (k1, k2, is_swapped) = if al1 <= al2 { (al1, al2, false) } else { (al2, al1, true) };
+            
+            let e = aggregated_edges.entry((k1, k2)).or_insert(EdgeStat {
+                addr1: stat.addr1, addr2: stat.addr2,
+                count1: 0, count2: 0, count3: 0, count4: 0,
+            });
+            
+            if is_swapped {
+                e.count1 += stat.count2;
+                e.count2 += stat.count1;
+            } else {
+                e.count1 += stat.count1;
+                e.count2 += stat.count2;
+            }
+            e.count3 += stat.count3;
+            e.count4 += stat.count4;
+        }
 
-        for ((label1, label2), stat) in group_edges {
+        let mut final_edges: Vec<_> = aggregated_edges.into_iter().collect();
+        final_edges.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+
+        for ((label1, label2), stat) in final_edges {
             if config.disable_self_weight && label1 == label2 {
                 continue;
             }

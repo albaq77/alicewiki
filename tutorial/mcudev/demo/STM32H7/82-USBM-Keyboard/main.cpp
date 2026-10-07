@@ -329,7 +329,7 @@ static void Stage1AskConfiguration(OTGHostDevice& dev) {
 	q.request_type.bits.direction = request_type::kIn;
 	q.request_type.bits.type = request_type::kStandard;
 	q.request_type.bits.recipient = request_type::kDevice;
-	q.request = request::kGetConfiguration;
+	q.request = static_cast<uint8>(StandardRequest::GetConfiguration);
 	q.value = 0;
 	q.index = 0;
 	q.length = 1;

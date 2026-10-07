@@ -3,7 +3,7 @@
 #include <vector>
 
 const int NUM_THREADS = 4;
-const int ITERATIONS = 100000; // 增加循环次数，产生大量访存
+const int ITERATIONS = 10000; // 增加循环次数，产生大量访存
 
 // 为了保证同一行的元素落在同一个 Cacheline，M 至少要大于等于线程数
 const int N = 32;
@@ -51,7 +51,12 @@ void worker(int thread_id) {
             global_struct_arr[i][thread_id].val += 1;
             global_struct_arr[i][thread_id].flag -= 1;
         }
-    }
+	}
+	for (int iter = 0; iter < ITERATIONS / 100; ++iter) {
+        for (int i = 0; i < N; ++i) {
+            global_2d[i][thread_id] += 1;
+        }
+	}
 }
 
 int main() {
