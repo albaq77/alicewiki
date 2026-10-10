@@ -4,7 +4,6 @@ import glob
 import re
 
 def color_text(text, color_code):
-    # 93 is Bright Yellow, 92 is Bright Green
     return f"\033[{color_code}m{text}\033[0m"
 
 def summarize_arrays(data_dir):
@@ -45,43 +44,6 @@ def summarize_arrays(data_dir):
                 print(f"      👉 维持现有 AOS 布局即可，当前主干维度已有最优的 Cache 命中率。")
         print()
 
-
-def find_struct_layout_in_cpp(struct_name, search_dir):
-    import re
-    # Simple regex to find struct body
-    struct_re = re.compile(rf'struct\\s+{struct_name}\\s*\\{{([^}}]+)\}}', re.MULTILINE)
-    
-    # Try to find cpp/h/hpp files
-    src_files = glob.glob(os.path.join(search_dir, "*.cpp")) +                 glob.glob(os.path.join(search_dir, "*.h")) +                 glob.glob(os.path.join(search_dir, "*.hpp")) +                 glob.glob(os.path.join(search_dir, "*.c"))
-                
-    for filepath in src_files:
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                content = f.read()
-            m = struct_re.search(content)
-            if m:
-                body = m.group(1)
-                # extract variable names
-                # e.g., "int health; float score;"
-                fields = []
-                lines = body.split(';')
-                for line in lines:
-                    line = line.strip()
-                    if not line or line.startswith('//'):
-                        continue
-                    # get the last word before ; as the field name
-                    parts = line.split()
-                    if parts:
-                        name = parts[-1].replace('*', '').replace(';', '')
-                        # handle arrays like arr[10]
-                        name = name.split('[')[0]
-                        if name:
-                            fields.append(name)
-                return fields
-        except:
-            pass
-    return []
-
 def summarize_structs(data_dir):
     print("="*60)
     print("📦 结构体内存布局重排建议 (Struct Cacheline Packing)")
@@ -112,39 +74,53 @@ def summarize_structs(data_dir):
             
         flat_recommended = [f for g in recommended_groups for f in g]
 
-        # 2. Parse Original Layout from C++ source files
-        # We assume the source files are in the parent directory of csv/ or in the data_dir itself
-        search_dirs = [data_dir, os.path.dirname(data_dir), os.path.join(os.path.dirname(data_dir), "..")]
+        # 2. 调用 dbg-viewtype 直接从二进制提取原生 DWARF 符号偏移
         original = []
-        for d in search_dirs:
-            original = find_struct_layout_in_cpp(struct_name, d)
-            if original:
-                break
+        exe_files = glob.glob(os.path.join(data_dir, "*.exe")) + glob.glob(os.path.join(data_dir, "*.out")) + glob.glob(os.path.join(data_dir, "t*"))
+        binary = exe_files[0] if exe_files else None
         
-        # Filter original fields to only those that actually appear in the recommended layout 
-        # (since dynamic tracing only shows accessed fields)
-        if original:
-            original = [f for f in original if f in flat_recommended]
+        if binary:
+            import subprocess
+            import tempfile
+            t_path = os.path.join(data_dir, "tmp_type.out")
+            v_path = os.path.join(data_dir, "tmp_var.out")
+            try:
+                subprocess.run(["dbg-viewtype", binary, t_path, v_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if os.path.exists(t_path):
+                    parsing_target = False
+                    nodes = []
+                    with open(t_path, 'r', encoding='utf-8') as tf:
+                        for line in tf:
+                            if line.startswith('\t'):
+                                if parsing_target:
+                                    parts = line.strip().split('\t')
+                                    if len(parts) >= 3:
+                                        offset = int(parts[0])
+                                        name = parts[1]
+                                        nodes.append((name, offset))
+                            else:
+                                line_trim = line.strip()
+                                if line_trim:
+                                    sname = line_trim.split('\t')[0]
+                                    if sname == struct_name:
+                                        parsing_target = True
+                                    else:
+                                        parsing_target = False
+                    nodes.sort(key=lambda x: x[1])
+                    original = [n[0] for n in nodes]
+            except Exception:
+                pass
+            finally:
+                if os.path.exists(t_path): os.remove(t_path)
+                if os.path.exists(v_path): os.remove(v_path)
+                
+        # 不再过滤原始字段！完整保留 DWARF 中的所有字段（包含如 mana 这样未被访问的冷字段）
+        # 以便向用户展示最真实的内存布局对比
+        pass
 
         print(f"🔹 结构体: {color_text(struct_name, '92')}")
-        # Fallback to DOT offsets if C++ parsing fails
         if not original:
-            dot_file = os.path.join(data_dir, f"graph.{struct_name}.fields.dot")
-            if os.path.exists(dot_file):
-                import re
-                node_re = re.compile(rf'^\s*"{struct_name}::([^"]+)"\s*\[.*offset=(\d+).*\]')
-                nodes = []
-                with open(dot_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        m = node_re.search(line)
-                        if m:
-                            nodes.append((m.group(1), int(m.group(2))))
-                nodes.sort(key=lambda x: x[1])
-                original = [n[0] for n in nodes]
-                original = [f for f in original if f in flat_recommended]
-        
-        if not original:
-            print("   (未找到 C++ 源码或 DOT 文件，无法推断原始布局)")
+            print("   (未找到对应的 DWARF 符号信息，无法精准推断原始布局，请确保目录下有可执行文件且安装了 dbg-viewtype)")
             for i, group in enumerate(recommended_groups):
                 print(f"      [Cacheline {i}]: " + " | ".join(group))
         else:
@@ -180,23 +156,22 @@ def summarize_globals(data_dir):
     with open(global_file, 'r', encoding='utf-8') as f:
         lines = f.readlines()
 
-    if not lines or len(lines) <= 3:
+    valid_lines = [l.strip() for l in lines if l.strip()]
+
+    if not valid_lines:
         print("  无离散全局变量需要打包。\n")
         return
 
     print("🔹 全局变量亲和性分组:")
-    for line in lines:
-        line = line.strip()
-        if not line or line.startswith("Target:") or line.startswith("Cacheline size:") or line.startswith("==="):
-            continue
-        print(f"   {line}")
+    for i, line in enumerate(valid_lines):
+        print(f"   📦 Cacheline {i}: {line}")
     print("\n   💡 建议: 将属于同一 Cacheline 的全局变量在 C/C++ 中紧凑定义，或利用 __attribute__((aligned(64))) 将它们对齐在一块。")
     print()
 
 if __name__ == "__main__":
     import platform
     if platform.system() == "Windows":
-        os.system("color") # Enable ANSI escape codes in Windows cmd
+        os.system("color") 
 
     target_dir = sys.argv[1] if len(sys.argv) > 1 else "."
     if not os.path.isdir(target_dir):
