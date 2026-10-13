@@ -47,3 +47,22 @@
 2. **生成器 (`generator`)**：纯粹的访存拓扑记录者。负责拼接轨迹图，**不得**自作主张对结构体布局做任何猜测，**绝不**随意改变变量的原生归属。
 3. **聚合器 (`package_fields`)**：闭门造车的打包机器。只认属于自己前缀的字段，严格按照 Cacheline 大小和热度连线进行打包。
 4. **总结脚本 (`summarize.py`)**：数据汇总中心。必须独立拉起 DWARF 分析去拉取真相，绝不允许反向污染或修改底层 Rust 源码（遵守 `AGENTS.md` 规范）。
+
+
+## 🛑 核心拓扑语义：真共享与伪共享的严格界定 (True vs. False Sharing)
+
+在本工具链的图谱模型中，必须严格区分自环边（Self-ring）与跨节点边（Cross-edge）的物理语义：
+
+### 1. 自环边 (Self-ring) = 真共享 (True Sharing)
+* **图谱表现**：节点指向自身的边，如 `"Struct::health" -- "Struct::health"` 带有极大的 `alpha`。
+* **物理语义**：多个 CPU 核心在并发读写**同一个抽象字段/变量实体**。这是典型的**真共享（True Sharing）**竞争。
+* **优化策略**：
+  * **加 Padding / 内存重排无效**：所有线程争抢的是同一个变量，加 Padding 无法消除同一内存实体的跨核争抢。
+  * **正确解法**：采用 **Thread-Local 线程私有化**、局部累加规约（Reduction）或原子操作降低同步冲突。
+
+### 2. 跨节点边 (Cross-edge) = 伪共享 (False Sharing) / 空间局部性
+* **图谱表现**：不同字段节点之间的边，如 `"Struct::health" -- "Struct::mana"`，或数组元素之间的连线。
+* **物理语义**：不同变量落入同一个 64-byte Cacheline 中。
+  * 若为同核连续访问（高 `beta`）：优良的**空间局部性（Spatial Locality）**，紧凑打包。
+  * 若为跨核写入竞争（高 `alpha`）：破坏性的**伪共享（False Sharing）**。
+* **优化策略**：通过 **Cacheline 隔离（Padding）** 或 **多维数组转置（SOA 架构）** 消除。

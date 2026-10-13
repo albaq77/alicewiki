@@ -116,9 +116,29 @@ def summarize_structs(data_dir):
                 
         # 不再过滤原始字段！完整保留 DWARF 中的所有字段（包含如 mana 这样未被访问的冷字段）
         # 以便向用户展示最真实的内存布局对比
-        pass
+        # 解析自环边检测真共享 (True Sharing)
+        severe_ts_fields = []
+        dot_file = os.path.join(data_dir, f"graph.{struct_name}.fields.dot")
+        if os.path.exists(dot_file):
+            with open(dot_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            pattern = re.compile(rf'"(?:[^:]+::)?([^"]+)"\s*--\s*"(?:[^:]+::)?\1"\s*\[(.*?)\]', re.DOTALL)
+            for match in pattern.finditer(content):
+                field_name = match.group(1)
+                attrs = match.group(2)
+                alpha_match = re.search(r'alpha=(\d+)', attrs)
+                if alpha_match:
+                    alpha_val = int(alpha_match.group(1))
+                    if alpha_val > 0:
+                        severe_ts_fields.append((field_name, alpha_val))
 
         print(f"🔹 结构体: {color_text(struct_name, '92')}")
+        
+        if severe_ts_fields:
+            print(f"   🚨 {color_text('真共享警报', '91')}: 侦测到跨核真共享冲突 (True Sharing)！")
+            for ts_field, alpha_val in severe_ts_fields:
+                print(f"      - 高频竞争字段: {color_text(ts_field, '91')} (跨核真共享冲突强度 Alpha={alpha_val})")
+            print(f"   👉 {color_text('优化建议', '93')}: 该字段为多线程高频并发读写热点，建议采用 Thread-Local 线程私有化或原子规约 (Reduce) 降低同步开销。\n")
         if not original:
             print("   (未找到对应的 DWARF 符号信息，无法精准推断原始布局，请确保目录下有可执行文件且安装了 dbg-viewtype)")
             for i, group in enumerate(recommended_groups):
