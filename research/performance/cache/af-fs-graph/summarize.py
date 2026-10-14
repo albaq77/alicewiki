@@ -2,6 +2,7 @@ import os
 import sys
 import glob
 import re
+import subprocess
 
 def color_text(text, color_code):
     return f"\033[{color_code}m{text}\033[0m"
@@ -20,28 +21,49 @@ def summarize_arrays(data_dir):
     for filepath in array_files:
         array_name = os.path.basename(filepath).replace("graph.", "").replace(".txt", "")
         weights = {}
+        pairs = {}
         with open(filepath, 'r', encoding='utf-8') as f:
             for line in f:
                 parts = line.strip().split()
-                if len(parts) == 2 and parts[0].startswith("dim"):
+                if len(parts) == 3 and parts[0].startswith("dim"):
                     weights[parts[0]] = float(parts[1])
+                    pairs[parts[0]] = int(parts[2])
 
         if not weights:
+            print(f"🔹 数组实体: {color_text(array_name, '92')}")
+            print(f"   ❌ 无法解析 {os.path.basename(filepath)}: 期望三列 'dim<k> <平均权重> <配对数>'。")
+            print()
             continue
 
         print(f"🔹 数组实体: {color_text(array_name, '92')}")
         for dim, w in weights.items():
-            print(f"   - {dim}: 亲和度权重 = {w}")
+            print(f"   - {dim}: 平均权重 = {w}  (配对数 = {pairs.get(dim, 0)})")
 
-        if all(w == 0 for w in weights.values()):
-            print("   💡 建议: 所有维度权重为 0。说明循环中穿插了其他读写（如全局变量），打断了该数组的连续局部性，建议先消除干扰。")
-        else:
-            max_dim = max(weights, key=weights.get)
-            print(f"   💡 诊断: {max_dim} 维度具有极高的访存亲和度。")
-            if max_dim != "dim0":
-                print(f"      👉 强烈建议【转置 (Transpose) / 转为 SOA 架构】，以便让 {max_dim} 维度在物理内存中连续存放！")
+        usable = {d: w for d, w in weights.items() if pairs.get(d, 0) > 0}
+        if not usable:
+            print("   ⚠️ 无法判定: 所有维度的配对数都是 0（窗口内没有观测到任何关系）。")
+            print()
+            continue
+
+        positives = {d: w for d, w in usable.items() if w > 0}
+        if not positives:
+            neg = ", ".join(f"{d}={w}" for d, w in usable.items() if w < 0)
+            print("   ⚠️ 无法判定: 没有任何维度提供正收益证据。")
+            if neg:
+                print(f"      负值: {neg}")
             else:
-                print(f"      👉 维持现有 AOS 布局即可，当前主干维度已有最优的 Cache 命中率。")
+                print("      有配对数的维度平均权重均为 0。")
+            print("      👉 建议: 保持现状，先排查采样/数据链路，不要据此改动布局。")
+            print()
+            continue
+
+        max_dim = max(positives, key=positives.get)
+        innermost = f"dim{len(weights) - 1}"
+        print(f"   💡 诊断: {max_dim} 维度具有最高的平均权重 ({positives[max_dim]})。")
+        if max_dim == innermost:
+            print(f"      👉 维持现有布局即可: {max_dim} 本来就是最内层（物理上连续的那一维）。")
+        else:
+            print(f"      👉 强烈建议【转置 (Transpose) / 转为 SOA 架构】，以便让 {max_dim} 维度成为最内层！")
         print()
 
 def summarize_structs(data_dir):
@@ -76,17 +98,22 @@ def summarize_structs(data_dir):
 
         # 2. 调用 dbg-viewtype 直接从二进制提取原生 DWARF 符号偏移
         original = []
+        dwarf_error = None
         exe_files = glob.glob(os.path.join(data_dir, "*.exe")) + glob.glob(os.path.join(data_dir, "*.out")) + glob.glob(os.path.join(data_dir, "t*"))
         binary = exe_files[0] if exe_files else None
-        
-        if binary:
-            import subprocess
-            import tempfile
+
+        if binary is None:
+            dwarf_error = "目录下没有找到可执行文件 (.exe/.out/t*)"
+        else:
             t_path = os.path.join(data_dir, "tmp_type.out")
             v_path = os.path.join(data_dir, "tmp_var.out")
             try:
-                subprocess.run(["dbg-viewtype", binary, t_path, v_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if os.path.exists(t_path):
+                proc = subprocess.run(["dbg-viewtype", binary, t_path, v_path], capture_output=True, text=True)
+                if proc.returncode != 0:
+                    dwarf_error = f"dbg-viewtype 退出码 {proc.returncode}: {(proc.stderr or '').strip()[:200]}"
+                elif not os.path.exists(t_path):
+                    dwarf_error = f"dbg-viewtype 未生成类型文件 {t_path}"
+                else:
                     parsing_target = False
                     nodes = []
                     with open(t_path, 'r', encoding='utf-8') as tf:
@@ -108,8 +135,12 @@ def summarize_structs(data_dir):
                                         parsing_target = False
                     nodes.sort(key=lambda x: x[1])
                     original = [n[0] for n in nodes]
-            except Exception:
-                pass
+                    if not original:
+                        dwarf_error = f"DWARF 中未找到结构体 '{struct_name}' 的成员（名字不匹配？）"
+            except FileNotFoundError:
+                dwarf_error = "找不到 dbg-viewtype 可执行文件（不在 PATH 中）"
+            except Exception as e:
+                dwarf_error = f"调用 dbg-viewtype 失败: {e}"
             finally:
                 if os.path.exists(t_path): os.remove(t_path)
                 if os.path.exists(v_path): os.remove(v_path)
@@ -140,7 +171,9 @@ def summarize_structs(data_dir):
                 print(f"      - 高频竞争字段: {color_text(ts_field, '91')} (跨核真共享冲突强度 Alpha={alpha_val})")
             print(f"   👉 {color_text('优化建议', '93')}: 该字段为多线程高频并发读写热点，建议采用 Thread-Local 线程私有化或原子规约 (Reduce) 降低同步开销。\n")
         if not original:
-            print("   (未找到对应的 DWARF 符号信息，无法精准推断原始布局，请确保目录下有可执行文件且安装了 dbg-viewtype)")
+            print(f"   ❌ 错误: 无法取得原始布局 —— {dwarf_error}")
+            print("      DWARF 是原始字段顺序的唯一真值来源，缺少它无法做布局对比。")
+            print("      下面只列出推荐分组，不给出对比结论：")
             for i, group in enumerate(recommended_groups):
                 print(f"      [Cacheline {i}]: " + " | ".join(group))
         else:

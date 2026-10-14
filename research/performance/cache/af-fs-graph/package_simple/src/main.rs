@@ -80,6 +80,22 @@ fn main() {
     }
 
     let n = nodes.len();
+
+    let edge_head_re = Regex::new(r#"(?m)^\s*"[^"]+"\s*--\s*"[^"]+"\s*\["#).unwrap();
+    let k_edges = edge_head_re.find_iter(&file_content).count();
+    let m_edges = edge_re.captures_iter(&file_content).count();
+    if m_edges < k_edges {
+        eprintln!(
+            "Error: 边读取失败 -- '{}' 中有 {} 条边, 只解析出 {} 条。DOT 属性格式可能已变更 (label 写法或属性顺序)。",
+            dot_file, k_edges, m_edges
+        );
+        std::process::exit(1);
+    }
+    if k_edges == 0 && n > 1 {
+        eprintln!("Warning: '{}' 中没有边 (节点 {} 个), 图本身可能是空的。", dot_file, n);
+    }
+    println!("[edges] {}: parsed {}/{}", dot_file, m_edges, k_edges);
+
     let mut w_matrix = vec![vec![0.0; n]; n];
 
     for caps in edge_re.captures_iter(&file_content) {

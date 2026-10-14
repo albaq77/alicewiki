@@ -120,6 +120,21 @@ fn main() {
         eprintln!("Error: No array nodes matched in the dot file.");
         std::process::exit(1);
     }
+
+    let edge_head_re = Regex::new(r#"(?m)^\s*"[^"]+"\s*--\s*"[^"]+"\s*\["#).unwrap();
+    let k_edges = edge_head_re.find_iter(&file_content).count();
+    let m_edges = edges.len();
+    if m_edges < k_edges {
+        eprintln!(
+            "Error: 边读取失败 -- '{}' 中有 {} 条边, 只解析出 {} 条。DOT 属性格式可能已变更 (label 写法或属性顺序)。",
+            dot_file, k_edges, m_edges
+        );
+        std::process::exit(1);
+    }
+    if k_edges == 0 && nodes.len() > 1 {
+        eprintln!("Warning: '{}' 中没有边 (节点 {} 个), 图本身可能是空的。", dot_file, nodes.len());
+    }
+    println!("[edges] {}: parsed {}/{}", dot_file, m_edges, k_edges);
     
     // Determine the target array base name from the filename
     // e.g., graph.global_2d.dot -> global_2d
@@ -228,9 +243,11 @@ fn main() {
     };
 
     let mut w_sums = vec![0.0; num_dims];
+    let mut pair_counts = vec![0usize; num_dims];
 
     for dim_k in 0..num_dims {
         let mut dim_w = 0.0;
+        let mut dim_n = 0usize;
         
         for edge in &edges {
             let u = match nodes.get(&edge.u) {
@@ -287,15 +304,17 @@ fn main() {
                     w = alpha_cli * (edge.a + edge.b) / gamma_cli;
                 }
                 dim_w += w;
+                dim_n += 1;
             }
         }
-        w_sums[dim_k] = dim_w;
+        pair_counts[dim_k] = dim_n;
+        w_sums[dim_k] = if dim_n > 0 { dim_w / dim_n as f64 } else { 0.0 };
     }
 
     let out_file = dot_file.replace(".dot", ".txt");
     if let Ok(mut f) = File::create(out_file) {
         for dim_k in 0..num_dims {
-            let _ = writeln!(f, "dim{} {}", dim_k, w_sums[dim_k]);
+            let _ = writeln!(f, "dim{} {} {}", dim_k, w_sums[dim_k], pair_counts[dim_k]);
         }
     }
 }

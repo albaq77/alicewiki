@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
@@ -12,11 +12,12 @@ struct Config {
     cache_line_size: u64,
     dbg_viewtype: String,
     disable_self_weight: bool,
+    window: u64,
 }
 
 fn print_usage_and_exit(prog_name: &str) -> ! {
     eprintln!(
-        "Usage: {} -i <trace.csv> -o <graph.dot> --binary <app> [--cache-line-size <size>] [--dbg-viewtype <path>] [--disable-self-weight]",
+        "Usage: {} -i <trace.csv> -o <graph.dot> --binary <app> [--cache-line-size <size>] [--dbg-viewtype <path>] [--disable-self-weight] [--window <ns>]",
         prog_name
     );
     exit(1);
@@ -32,6 +33,7 @@ fn parse_args() -> Config {
     let mut cache_line_size = 64;
     let mut dbg_viewtype = "dbg-viewtype".to_string();
     let mut disable_self_weight = false;
+    let mut window = 0u64;
 
     let mut i = 1;
     while i < args.len() {
@@ -77,6 +79,17 @@ fn parse_args() -> Config {
             }
         } else if arg == "--disable-self-weight" {
             disable_self_weight = true;
+        } else if arg == "--window" {
+            if i + 1 < args.len() {
+                window = args[i + 1].parse().unwrap_or(u64::MAX);
+                if window == u64::MAX {
+                    eprintln!("Error: --window expects a non-negative integer of nanoseconds.");
+                    exit(1);
+                }
+                i += 1;
+            } else {
+                print_usage_and_exit(&prog_name);
+            }
         } else {
             eprintln!("Unknown argument: {}", arg);
             print_usage_and_exit(&prog_name);
@@ -104,6 +117,7 @@ fn parse_args() -> Config {
         cache_line_size,
         dbg_viewtype,
         disable_self_weight,
+        window,
     }
 }
 
@@ -115,6 +129,7 @@ enum Rw {
 
 #[derive(Debug, Clone)]
 struct Access {
+    time: u64,
     addr: u64,
     rw: Rw,
     size: u64,
@@ -129,6 +144,7 @@ impl Access {
             return None;
         }
 
+        let time = parts[0].parse::<u64>().unwrap_or(0);
         let addr_str = parts[1];
         let addr = if addr_str.starts_with("0x") || addr_str.starts_with("0X") {
             u64::from_str_radix(&addr_str[2..], 16).ok()
@@ -169,6 +185,7 @@ impl Access {
         };
 
         Some(Access {
+            time,
             addr,
             rw,
             size,
@@ -531,7 +548,8 @@ fn main() {
     let mut node_map: HashMap<String, NodeInfo> = HashMap::new();
     let mut edge_map: HashMap<(String, String), EdgeStat> = HashMap::new();
 
-    let mut prev_valid: Option<(Access, NodeInfo)> = None;
+    let mut window_hist: VecDeque<(Access, NodeInfo)> = VecDeque::new();
+    let window_max: usize = if config.window == 0 { 1 } else { 4096 };
     let mut warn_limit = 0;
 
     for line in reader.lines() {
@@ -550,7 +568,25 @@ fn main() {
                     .entry(curr_info.label.clone())
                     .or_insert_with(|| curr_info.clone());
 
-                if let Some((prev_acc, prev_info)) = &prev_valid {
+                if config.window > 0 {
+                    loop {
+                        let front_time = match window_hist.front() {
+                            Some(f) => f.0.time,
+                            None => break,
+                        };
+                        if curr_acc.time.saturating_sub(front_time) > config.window {
+                            window_hist.pop_front();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                let mut seen: HashSet<String> = HashSet::new();
+                for (prev_acc, prev_info) in window_hist.iter().rev() {
+                    if !seen.insert(prev_info.label.clone()) {
+                        continue;
+                    }
                     let mut label1 = prev_info.label.clone();
                     let mut label2 = curr_info.label.clone();
                     let mut addr1 = prev_acc.addr;
@@ -582,7 +618,10 @@ fn main() {
                         stat.count4 += 1;
                     }
                 }
-                prev_valid = Some((curr_acc, curr_info));
+                window_hist.push_back((curr_acc, curr_info));
+                while window_hist.len() > window_max {
+                    window_hist.pop_front();
+                }
             } else {
                 if warn_limit < 20 {
                     eprintln!("Warning: could not resolve label for addr 0x{:x}", curr_acc.addr);

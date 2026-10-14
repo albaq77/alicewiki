@@ -5,6 +5,7 @@ affspath = $(awiki_path)/research/performance/cache/af-fs-graph
 SRCS ?= $(wildcard *.cpp)
 BIN ?= t.exe
 TRACE ?= trace.csv
+TAU ?= 30000
 
 K ?= 1
 G ?= 15
@@ -54,7 +55,7 @@ run: $(TRACE)
 
 opt: $(TRACE) $(BIN)
 	rm -rf *.dot *.txt *.layout.txt
-	$(affspath)/generator/target/debug/generator -i $(TRACE) -o graph.dot --binary $(BIN) 
+	$(affspath)/generator/target/debug/generator -i $(TRACE) -o graph.dot --binary $(BIN) --window $(TAU) 
 	@for file in graph.*.dot; do \
 		case "$$file" in \
 			*.fields.dot) \
@@ -76,7 +77,11 @@ opt: $(TRACE) $(BIN)
 	
 report:
 	@mkdir -p $(REPORTDIR)
-	@python $(affspath)/summarize.py . | tee $(REPORT)
+	@{ \
+		echo "run: src=$(SRCS) trace=$(TRACE) ($$(wc -l < $(TRACE) 2>/dev/null || echo 0) 行) k=$(K) g=$(G) gamma=$(GAMMA) line=$(LINE) window=$(TAU)ns"; \
+		echo; \
+		python $(affspath)/summarize.py .; \
+	} | tee $(REPORT)
 
 sum: report
 

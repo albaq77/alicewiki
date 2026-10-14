@@ -291,7 +291,7 @@ Cacheline size: 64
 ```makefile
 opt:
 	rm -rf *.dot *.txt *.layout.txt
-	$(affspath)/generator/target/debug/generator -i *.csv -o graph.dot --binary t*.exe --disable-self-weight
+	$(affspath)/generator/target/debug/generator -i *.csv -o graph.dot --binary t*.exe
 	@for file in graph.*.dot; do \
 		case "$$file" in \
 			*.fields.dot) \
