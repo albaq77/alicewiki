@@ -93,7 +93,7 @@ verify: report
 	printf "  keep     : %s\n" "$$(grep -c '维持现有' $$latest)"
 
 clean:
-	rm -rf *.dot *.txt *.layout.txt
+	rm -rf *.dot *.txt *.layout.txt *csv reports *.ll *.exe
 
 distclean: clean
 	rm -rf tsin.ll targ.ll $(TU_LL) $(BIN) csv $(TRACE)

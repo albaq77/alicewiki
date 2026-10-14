@@ -200,6 +200,8 @@ struct NodeInfo {
     typ: String,
     offset: i64,
     struct_name: Option<String>,
+    dims: Vec<u64>,
+    elem_size: u64,
 }
 
 #[derive(Debug, Default)]
@@ -316,6 +318,8 @@ fn resolve_access(
             let mut final_offset = delta;
             let mut resolved_struct_name = None;
             let mut resolved_field_name = None;
+            let mut declared_dims: Vec<u64> = Vec::new();
+            let mut declared_elem: u64 = 0;
 
             if let Some(st) = types.get(&var.typ) {
                 if let Some((&m_offset, m)) = st.members.range(..=delta).next_back() {
@@ -368,6 +372,9 @@ fn resolve_access(
                                 elem_size = struct_info.size;
                             }
                         }
+
+                        declared_dims = bounds.clone();
+                        declared_elem = elem_size;
 
                         if elem_size > 0 {
                             let mut linear_index = member_delta / elem_size;
@@ -430,6 +437,9 @@ fn resolve_access(
                     } else if let Some(struct_info) = types.get(current_str) {
                         elem_size = struct_info.size;
                     }
+
+                    declared_dims = bounds.clone();
+                    declared_elem = elem_size;
                     
                     let mut var_delta = delta;
                     if elem_size > 0 {
@@ -486,6 +496,8 @@ fn resolve_access(
                     typ,
                     offset: final_offset as i64,
                     struct_name: Some(s_name),
+                    dims: declared_dims.clone(),
+                    elem_size: declared_elem,
                 });
             } else {
                 return Some(NodeInfo {
@@ -493,6 +505,8 @@ fn resolve_access(
                     typ,
                     offset: final_offset as i64,
                     struct_name: resolved_struct_name, // Fix: Preserve struct_name even if it's an array instance
+                    dims: declared_dims.clone(),
+                    elem_size: declared_elem,
                 });
             }
         }
@@ -764,15 +778,20 @@ fn main() {
         nodes.sort_by(|a, b| a.label.cmp(&b.label));
 
         for info in nodes {
-            writeln!(
-                out,
-                "  \"{}\" [label=\"{}\", type=\"{}\", offset={}];",
-                escape_dot_string(&info.label),
+            let mut attributes = format!(
+                "label=\"{}\", type=\"{}\", offset={}",
                 escape_dot_string(&info.label),
                 escape_dot_string(&info.typ),
                 info.offset
-            )
-            .unwrap();
+            );
+            if !info.dims.is_empty() {
+                let declared: Vec<String> = info.dims.iter().map(|d| d.to_string()).collect();
+                attributes.push_str(&format!(", dims=\"{}\"", declared.join(",")));
+            }
+            if info.elem_size > 0 {
+                attributes.push_str(&format!(", elem_size={}", info.elem_size));
+            }
+            writeln!(out, "  \"{}\" [{}];", escape_dot_string(&info.label), attributes).unwrap();
         }
         writeln!(out, "").unwrap();
 

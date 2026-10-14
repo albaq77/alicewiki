@@ -22,22 +22,30 @@ def summarize_arrays(data_dir):
         array_name = os.path.basename(filepath).replace("graph.", "").replace(".txt", "")
         weights = {}
         pairs = {}
+        sizes = {}
+        kinds = {}
         with open(filepath, 'r', encoding='utf-8') as f:
             for line in f:
                 parts = line.strip().split()
-                if len(parts) == 3 and parts[0].startswith("dim"):
+                if len(parts) >= 3 and parts[0].startswith("dim"):
                     weights[parts[0]] = float(parts[1])
                     pairs[parts[0]] = int(parts[2])
+                    for tok in parts[3:]:
+                        if tok.startswith("size="):
+                            sizes[parts[0]] = tok[5:]
+                        elif tok == "field":
+                            kinds[parts[0]] = "field"
 
         if not weights:
             print(f"🔹 数组实体: {color_text(array_name, '92')}")
-            print(f"   ❌ 无法解析 {os.path.basename(filepath)}: 期望三列 'dim<k> <平均权重> <配对数>'。")
+            print(f"   ❌ 无法解析 {os.path.basename(filepath)}: 期望 'dim<k> <平均权重> <配对数> [size=<n>] [field]'。")
             print()
             continue
 
         print(f"🔹 数组实体: {color_text(array_name, '92')}")
         for dim, w in weights.items():
-            print(f"   - {dim}: 平均权重 = {w}  (配对数 = {pairs.get(dim, 0)})")
+            tag = "字段维" if kinds.get(dim) == "field" else "下标维"
+            print(f"   - {dim}[{tag}, 尺寸={sizes.get(dim, '?')}]: 平均权重 = {w}  (配对数 = {pairs.get(dim, 0)})")
 
         usable = {d: w for d, w in weights.items() if pairs.get(d, 0) > 0}
         if not usable:

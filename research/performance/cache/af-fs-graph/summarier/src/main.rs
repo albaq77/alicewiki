@@ -12,6 +12,8 @@ struct ParsedNode {
     indices: Vec<u64>,
     suffix: String,
     offset: u64,
+    dims: Vec<u64>,
+    elem_size: u64,
 }
 
 fn orig_linear_index(indices: &[u64], bounds: &[u64]) -> u64 {
@@ -74,6 +76,8 @@ fn main() {
     // Use multi-line regex for edges
     let edge_re = Regex::new(r#""([^"]+)"\s*--\s*"([^"]+)"\s*\[[^\]]*?label="\(([\d\.]+),([\d\.]+)\)""#).unwrap();
     let name_re = Regex::new(r#"^([^\[]+)((?:\[\d+\])+)(.*)$"#).unwrap();
+    let dims_re = Regex::new(r#"dims="([0-9,]+)""#).unwrap();
+    let elem_re = Regex::new(r#"elem_size=(\d+)"#).unwrap();
 
     let mut nodes: HashMap<String, ParsedNode> = HashMap::new();
     let mut edges = Vec::new();
@@ -82,6 +86,17 @@ fn main() {
         if let Some(caps) = node_re.captures(line) {
             let name = caps[1].to_string();
             let offset: u64 = caps[2].parse().unwrap_or(0);
+            let mut dims: Vec<u64> = Vec::new();
+            if let Some(dc) = dims_re.captures(line) {
+                for token in dc[1].split(',') {
+                    if let Ok(value) = token.parse::<u64>() {
+                        dims.push(value);
+                    }
+                }
+            }
+            let elem_size: u64 = elem_re.captures(line)
+                .map(|c| c[1].parse::<u64>().unwrap_or(0))
+                .unwrap_or(0);
             
             if let Some(name_caps) = name_re.captures(&name) {
                 let base = name_caps[1].to_string();
@@ -103,6 +118,8 @@ fn main() {
                     indices,
                     suffix,
                     offset,
+                    dims,
+                    elem_size,
                 });
             }
         }
@@ -170,14 +187,38 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut bounds = vec![0; num_dims];
+    // Prefer the dimensions declared by the producer. Observed maxima are only a
+    // fallback: a run may not touch every index, which silently changes the stride
+    // of that dimension and therefore flips same-line verdicts.
+    let mut declared: Vec<u64> = Vec::new();
     for n in nodes.values() {
-        for (d, &idx) in n.indices.iter().enumerate() {
-            if idx + 1 > bounds[d] {
-                bounds[d] = idx + 1;
-            }
+        if n.dims.is_empty() {
+            continue;
+        }
+        if declared.is_empty() {
+            declared = n.dims.clone();
+        } else if declared != n.dims {
+            eprintln!("Error: inconsistent declared dims in '{}'.", dot_file);
+            std::process::exit(1);
         }
     }
+    let mut bounds = if declared.len() == num_dims {
+        declared.clone()
+    } else {
+        if !declared.is_empty() {
+            eprintln!("Warning: declared dims ({}) do not match node dims ({}); using observed maxima.",
+                declared.len(), num_dims);
+        }
+        let mut observed = vec![0; num_dims];
+        for n in nodes.values() {
+            for (d, &idx) in n.indices.iter().enumerate() {
+                if idx + 1 > observed[d] {
+                    observed[d] = idx + 1;
+                }
+            }
+        }
+        observed
+    };
 
     let mut suffix_offsets: HashMap<String, u64> = HashMap::new();
     for n in nodes.values() {
@@ -189,8 +230,20 @@ fn main() {
     
     let mut struct_size = 0;
     let mut found_size = false;
-    
+
+    // Prefer the element stride declared by the producer. Deriving it from an
+    // arbitrary node pair is HashMap-order dependent, and wrong whenever that pair
+    // differs in more than the innermost dimension.
+    for n in nodes.values() {
+        if n.elem_size > 0 {
+            struct_size = n.elem_size;
+            found_size = true;
+            break;
+        }
+    }
+
     for n1 in nodes.values() {
+        if found_size { break; }
         for n2 in nodes.values() {
             if n1.suffix == n2.suffix {
                 let idx1 = orig_linear_index(&n1.indices, &bounds);
@@ -314,7 +367,11 @@ fn main() {
     let out_file = dot_file.replace(".dot", ".txt");
     if let Ok(mut f) = File::create(out_file) {
         for dim_k in 0..num_dims {
-            let _ = writeln!(f, "dim{} {} {}", dim_k, w_sums[dim_k], pair_counts[dim_k]);
+            if has_struct_dim && dim_k + 1 == num_dims {
+                let _ = writeln!(f, "dim{} {} {} size={} field", dim_k, w_sums[dim_k], pair_counts[dim_k], bounds[dim_k]);
+            } else {
+                let _ = writeln!(f, "dim{} {} {} size={}", dim_k, w_sums[dim_k], pair_counts[dim_k], bounds[dim_k]);
+            }
         }
     }
 }
