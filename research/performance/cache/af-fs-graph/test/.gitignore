@@ -1,0 +1,7 @@
+# Recreated builds, captures and performance samples stay local.
+artifacts/
+performance/results/
+
+# Recreated source snapshots/diffs; keep the reviewed baseline/rewritten C++ files.
+performance/test_fields2/test_fields2.original.cpp
+performance/test_fields2/*.diff

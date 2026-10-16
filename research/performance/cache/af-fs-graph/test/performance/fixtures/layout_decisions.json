@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "origin": "verified implementation-final-loop/run-02 recommendations; frozen test_fields2 source adapter input",
+  "benchmark_source_sha256": "6cb01fe15dd211fc29be259401a015deb594f61032a569d64a2fb33f63139245",
+  "layouts": {
+    "matrix_2d": {
+      "action": "axis_permutation",
+      "axis_order": [
+        1,
+        0
+      ],
+      "selected_field": null,
+      "element_stride": 8,
+      "field_stride": null,
+      "original_base_mod_64": 32
+    },
+    "tensor_3d": {
+      "action": "axis_permutation",
+      "axis_order": [
+        1,
+        0,
+        2
+      ],
+      "selected_field": null,
+      "element_stride": 8,
+      "field_stride": null,
+      "original_base_mod_64": 32
+    },
+    "entity_arr": {
+      "action": "partial_soa",
+      "axis_order": [
+        1,
+        0
+      ],
+      "selected_field": ".health",
+      "element_stride": 320,
+      "field_stride": 8,
+      "original_base_mod_64": 32
+    },
+    "weapon_arr": {
+      "action": "partial_soa",
+      "axis_order": [
+        1,
+        0
+      ],
+      "selected_field": ".base_damage",
+      "element_stride": 240,
+      "field_stride": 8,
+      "original_base_mod_64": 32
+    },
+    "globals": {
+      "original_offsets": [
+        0,
+        8,
+        16,
+        24,
+        32,
+        40,
+        48,
+        56,
+        64,
+        72,
+        80,
+        88,
+        96,
+        104,
+        112,
+        120
+      ],
+      "rewritten_offsets": [
+        0,
+        8,
+        16,
+        24,
+        192,
+        200,
+        208,
+        216,
+        80,
+        88,
+        64,
+        72,
+        128,
+        136,
+        144,
+        152
+      ],
+      "original_base_mod_64": 16
+    }
+  },
+  "decision_input_sha256": {
+    "graph.entity_arr.decision.json": "7f9869cc5ea13ec89e678ce5e287d735eb7fc877ac8dce3e28e335226e258c19",
+    "graph.matrix_2d.decision.json": "e53eaeb35ebe7d8ae20f672eff08d6a369ecefc0445c901791385f1a0e0c01ef",
+    "graph.tensor_3d.decision.json": "f2050b2726331991cf22d3e28b881bd063710bdd8110a2bf4dca91b38753c185",
+    "graph.weapon_arr.decision.json": "4422b118bcf587a798fafba058785964b42cd992483e510d23787f5bc50160bb",
+    "graph.placement.txt": "a9deb63edcfbcaba1da9ef79092c1814e767cd069f3317adaef2dc31ee1a8586",
+    "graph.ComplexEntity.fields.dot": "c95abe0eb6878aa0bec27d8908607253230668baf056e8b359ef0f916e2625a0",
+    "graph.GameConfig.fields.dot": "02aea19f682ac2ce19438cf799be46a029db116e343182e3a4ce4c3df2029bc8",
+    "graph.WeaponStats.fields.dot": "99809e86b418c749a7c78dddb2a9b774a542f981487c99b3043ea97955bad7a9",
+    "graph.dot": "a0b507fe9ba45ce807ed54e5c1ed2ad775b23558868a548e551e9bb6fde36923",
+    "graph.entity_arr.dot": "58e65a44f03f0250549322e8f8ab8764d03f2758e522d82a1c585b67ef797fc3",
+    "graph.matrix_2d.dot": "75f9b4c24991e1702b3ff74651e5e446b9e24242e5ce2d19678c40a18bea11ce",
+    "graph.tensor_3d.dot": "29d25f96fe8f0713e24a95832f47be18d173d778998dfc1a67704cd72fa054da",
+    "graph.weapon_arr.dot": "8820f6f4c4a9ca24c1097ee6d22fe4f27ccc8a73f34845ae8a342f7bc398c126"
+  }
+}

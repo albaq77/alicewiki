@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, exit};
+use std::process::{exit, Command};
 
 #[derive(Debug)]
 struct Config {
@@ -25,7 +25,10 @@ fn print_usage_and_exit(prog_name: &str) -> ! {
 
 fn parse_args() -> Config {
     let args: Vec<String> = env::args().collect();
-    let prog_name = args.get(0).cloned().unwrap_or_else(|| "generator".to_string());
+    let prog_name = args
+        .get(0)
+        .cloned()
+        .unwrap_or_else(|| "generator".to_string());
 
     let mut input = None;
     let mut output = None;
@@ -134,6 +137,7 @@ struct Access {
     rw: Rw,
     size: u64,
     core_id: u32,
+    thread_id: u64,
 }
 
 impl Access {
@@ -184,13 +188,56 @@ impl Access {
             }
         };
 
+        let thread_id = match parts[5].parse::<u64>() {
+            Ok(t) => t,
+            Err(_) => {
+                eprintln!("Warning: invalid thread_id, skipping: {}", line);
+                return None;
+            }
+        };
+
         Some(Access {
             time,
             addr,
             rw,
             size,
             core_id,
+            thread_id,
         })
+    }
+}
+
+fn classify_pair(prev: &Access, curr: &Access, cache_line_size: u64) -> (u8, bool) {
+    let prev_end = prev.addr.saturating_add(prev.size);
+    let curr_end = curr.addr.saturating_add(curr.size);
+    let same_line = prev.size > 0
+        && curr.size > 0
+        && prev.addr / cache_line_size <= curr_end.saturating_sub(1) / cache_line_size
+        && curr.addr / cache_line_size <= prev_end.saturating_sub(1) / cache_line_size;
+    let overlaps = prev.addr < curr_end && curr.addr < prev_end;
+    let cross_worker = prev.core_id != curr.core_id && prev.thread_id != curr.thread_id;
+    let involves_write = prev.rw == Rw::Write || curr.rw == Rw::Write;
+    let bucket = if cross_worker && involves_write {
+        if same_line {
+            1
+        } else {
+            2
+        }
+    } else if cross_worker {
+        3
+    } else {
+        4
+    };
+    (bucket, overlaps)
+}
+
+fn sharing_provenance(bucket: u8, overlaps: bool) -> (u64, u64) {
+    if bucket != 1 {
+        (0, 0)
+    } else if overlaps {
+        (1, 0)
+    } else {
+        (0, 1)
     }
 }
 
@@ -202,6 +249,9 @@ struct NodeInfo {
     struct_name: Option<String>,
     dims: Vec<u64>,
     elem_size: u64,
+    byte_size: u64,
+    base_address: u64,
+    member: Option<StructMember>,
 }
 
 #[derive(Debug, Default)]
@@ -210,11 +260,13 @@ struct EdgeStat {
     count2: u64,
     count3: u64,
     count4: u64,
+    true_alpha: u64,
+    false_alpha: u64,
     addr1: u64,
     addr2: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct StructMember {
     offset: u64,
     name: String,
@@ -231,7 +283,6 @@ struct StructType {
 #[derive(Debug, Clone)]
 struct GlobalVar {
     name: String,
-    addr: u64,
     typ: String,
 }
 
@@ -249,7 +300,8 @@ fn parse_types(path: &str) -> HashMap<String, StructType> {
                         let offset: u64 = parts[0].parse().unwrap_or(0);
                         let name = parts[1].to_string();
                         let typ = parts[2].trim_matches('\'').to_string();
-                        st.members.insert(offset, StructMember { offset, name, typ });
+                        st.members
+                            .insert(offset, StructMember { offset, name, typ });
                     }
                 }
             } else {
@@ -286,232 +338,146 @@ fn parse_vars(path: &str) -> BTreeMap<u64, GlobalVar> {
                 let name = parts[0].to_string();
                 let addr: u64 = parts[1].parse().unwrap_or(0);
                 let typ = parts[2].trim_matches('\'').to_string();
-                map.insert(addr, GlobalVar { name, addr, typ });
+                map.insert(addr, GlobalVar { name, typ });
             }
         }
     }
     map
 }
 
+#[path = "../../type_layout.rs"]
+mod type_layout;
+
 fn guess_base_size(type_str: &str) -> Option<u64> {
-    let t = type_str.replace("volatile", "").replace("const", "").replace(" ", "");
-    match t.as_str() {
-        "char" | "signedchar" | "unsignedchar" | "int8_t" | "uint8_t" => Some(1),
-        "short" | "unsignedshort" | "int16_t" | "uint16_t" => Some(2),
-        "int" | "unsignedint" | "int32_t" | "uint32_t" | "float" => Some(4),
-        "long" | "unsignedlong" | "longlong" | "unsignedlonglong" | "longint" | "unsignedlongint" | "int64_t" | "uint64_t" | "double" => Some(8),
-        _ if t.ends_with('*') => Some(8),
-        _ => None,
+    type_layout::type_layout(type_str).map(|layout| layout.0)
+}
+
+// Array bounds and element sizes come from types, never the gap to the next
+// member: that gap may contain alignment padding.
+fn type_shape(name: &str) -> Option<(String, Vec<u64>)> {
+    let mut base = name.trim();
+    let mut dims = Vec::new();
+    while base.ends_with(']') {
+        let start = base.rfind('[')?;
+        let bound = base[start + 1..base.len() - 1].trim().parse().ok()?;
+        if bound == 0 {
+            return None;
+        }
+        dims.push(bound);
+        base = base[..start].trim();
     }
+    dims.reverse();
+    let base = base
+        .split_whitespace()
+        .filter(|s| !matches!(*s, "const" | "volatile" | "restrict" | "_Atomic"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some((base, dims))
+}
+
+fn known_size(name: &str, types: &HashMap<String, StructType>) -> Option<u64> {
+    let (base, dims) = type_shape(name)?;
+    let size = guess_base_size(&base).or_else(|| types.get(&base).map(|s| s.size))?;
+    dims.iter()
+        .try_fold(size, |size, bound| size.checked_mul(*bound))
+        .filter(|s| *s > 0)
+}
+
+fn append_indices(label: &mut String, mut index: u64, dims: &[u64]) {
+    let mut indices = Vec::new();
+    for bound in dims.iter().rev() {
+        indices.push(index % bound);
+        index /= bound;
+    }
+    for i in indices.iter().rev() {
+        label.push_str(&format!("[{}]", i));
+    }
+}
+
+// A node represents one typed leaf access. Bulk operations spanning leaves,
+// accesses into implicit padding, and unknown objects are explicitly skipped;
+// they must not be folded into a neighbouring member or a wrapped array index.
+fn resolve_leaf(
+    typ: &str,
+    delta: u64,
+    size: u64,
+    types: &HashMap<String, StructType>,
+    label: &mut String,
+    member: &mut Option<StructMember>,
+    depth: usize,
+) -> Option<String> {
+    if depth > 32 || delta.checked_add(size)? > known_size(typ, types)? {
+        return None;
+    }
+    let (base, dims) = type_shape(typ)?;
+    if !dims.is_empty() {
+        let element_size = known_size(&base, types)?;
+        let within = delta % element_size;
+        if within.checked_add(size)? > element_size {
+            return None;
+        }
+        append_indices(label, delta / element_size, &dims);
+        return resolve_leaf(&base, within, size, types, label, member, depth + 1);
+    }
+    if let Some(st) = types.get(&base) {
+        let (_, field) = st.members.range(..=delta).next_back()?;
+        let within = delta.checked_sub(field.offset)?;
+        if within.checked_add(size)? > known_size(&field.typ, types)? {
+            return None;
+        }
+        if member.is_none() {
+            *member = Some(field.clone());
+        }
+        label.push_str(&format!(".{}", field.name));
+        return resolve_leaf(&field.typ, within, size, types, label, member, depth + 1);
+    }
+    if delta != 0 || size != known_size(&base, types)? {
+        label.push_str(&format!("+{}:{}", delta, size));
+    }
+    Some(base)
 }
 
 fn resolve_access(
     addr: u64,
+    size: u64,
     vars: &BTreeMap<u64, GlobalVar>,
     types: &HashMap<String, StructType>,
 ) -> Option<NodeInfo> {
-    if let Some((&var_addr, var)) = vars.range(..=addr).next_back() {
-        if addr - var_addr < 1024 * 1024 * 10 { // 10MB sanity check
-            let delta = addr - var_addr;
-            let mut label = var.name.clone();
-            let mut typ = var.typ.clone();
-            let mut final_offset = delta;
-            let mut resolved_struct_name = None;
-            let mut resolved_field_name = None;
-            let mut declared_dims: Vec<u64> = Vec::new();
-            let mut declared_elem: u64 = 0;
-
-            if let Some(st) = types.get(&var.typ) {
-                if let Some((&m_offset, m)) = st.members.range(..=delta).next_back() {
-                    let mut member_delta = delta - m_offset;
-                    label = format!("{}.{}", label, m.name);
-                    typ = m.typ.clone();
-                    final_offset = member_delta;
-                    resolved_struct_name = Some(st.name.clone());
-                    let mut fname = m.name.clone();
-                    if member_delta > 0 { fname = format!("{}+{}", fname, member_delta); }
-                    resolved_field_name = Some(fname);
-
-                    // Parse all array bounds: e.g. "int[10][20]" -> bounds = [10, 20]
-                    let mut bounds = Vec::new();
-                    let mut current_str = typ.as_str();
-                    while current_str.ends_with(']') {
-                        if let Some(start) = current_str.rfind('[') {
-                            let bound_str = &current_str[start + 1..current_str.len() - 1];
-                            if let Ok(b) = bound_str.parse::<u64>() {
-                                bounds.push(b);
-                                current_str = &current_str[..start];
-                            } else if bound_str.is_empty() {
-                                bounds.push(0);
-                                current_str = &current_str[..start];
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-                    bounds.reverse();
-
-                    if !bounds.is_empty() {
-                        let total_elements: u64 = bounds.iter().map(|&x| std::cmp::max(x, 1)).product();
-                        
-                        let mut total_size = 0;
-                        if let Some((&next_offset, _)) = st.members.range(m_offset + 1..).next() {
-                            total_size = next_offset - m_offset;
-                        }
-
-                        let mut elem_size = 0;
-                        if total_size > 0 && total_elements > 0 {
-                            elem_size = total_size / total_elements;
-                        }
-                        if elem_size == 0 {
-                            if let Some(guess) = guess_base_size(current_str) {
-                                elem_size = guess;
-                            } else if let Some(struct_info) = types.get(current_str) {
-                                elem_size = struct_info.size;
-                            }
-                        }
-
-                        declared_dims = bounds.clone();
-                        declared_elem = elem_size;
-
-                        if elem_size > 0 {
-                            let mut linear_index = member_delta / elem_size;
-                            member_delta = member_delta % elem_size;
-
-                            let mut indices = Vec::new();
-                            for &bound in bounds.iter().rev() {
-                                let dim_bound = std::cmp::max(bound, 1);
-                                indices.push(linear_index % dim_bound);
-                                linear_index /= dim_bound;
-                            }
-                            indices.reverse();
-
-                            for idx in indices {
-                                label = format!("{}[{}]", label, idx);
-                            }
-                        } else {
-                            if member_delta == 0 {
-                                for _ in 0..bounds.len() {
-                                    label = format!("{}[0]", label);
-                                }
-                            } else {
-                                label = format!("{}[?]+{}", label, member_delta);
-                                member_delta = 0;
-                            }
-                        }
-                    }
-
-                    if member_delta > 0 {
-                        label = format!("{}+{}", label, member_delta);
-                    }
-                }
-            } else {
-                // Global variable is an array itself?
-                let mut bounds = Vec::new();
-                let mut current_str = typ.as_str();
-                while current_str.ends_with(']') {
-                    if let Some(start) = current_str.rfind('[') {
-                        let bound_str = &current_str[start + 1..current_str.len() - 1];
-                        if let Ok(b) = bound_str.parse::<u64>() {
-                            bounds.push(b);
-                            current_str = &current_str[..start];
-                        } else if bound_str.is_empty() {
-                            bounds.push(0);
-                            current_str = &current_str[..start];
-                        } else {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                bounds.reverse();
-
-                if !bounds.is_empty() {
-                    let total_elements: u64 = bounds.iter().map(|&x| std::cmp::max(x, 1)).product();
-                    let mut elem_size = 0;
-                    if let Some(guess) = guess_base_size(current_str) {
-                        elem_size = guess;
-                    } else if let Some(struct_info) = types.get(current_str) {
-                        elem_size = struct_info.size;
-                    }
-
-                    declared_dims = bounds.clone();
-                    declared_elem = elem_size;
-                    
-                    let mut var_delta = delta;
-                    if elem_size > 0 {
-                        let mut linear_index = var_delta / elem_size;
-                        var_delta = var_delta % elem_size;
-
-                        let mut indices = Vec::new();
-                        for &bound in bounds.iter().rev() {
-                            let dim_bound = std::cmp::max(bound, 1);
-                            indices.push(linear_index % dim_bound);
-                            linear_index /= dim_bound;
-                        }
-                        indices.reverse();
-
-                        for idx in indices {
-                            label = format!("{}[{}]", label, idx);
-                        }
-
-                        // Always try to resolve struct member even if var_delta is 0
-                        if let Some(st) = types.get(current_str) {
-                            if let Some((&m_offset, m)) = st.members.range(..=var_delta).next_back() {
-                                let member_delta = var_delta - m_offset;
-                                label = format!("{}.{}", label, m.name);
-                                typ = m.typ.clone();
-                                resolved_struct_name = Some(st.name.clone());
-                                
-                                if member_delta > 0 {
-                                    label = format!("{}+{}", label, member_delta);
-                                }
-                                var_delta = 0;
-                            }
-                        }
-                    } else {
-                        if var_delta == 0 {
-                            for _ in 0..bounds.len() {
-                                label = format!("{}[0]", label);
-                            }
-                        } else {
-                            label = format!("{}[?]+{}", label, var_delta);
-                            var_delta = 0;
-                        }
-                    }
-                    if var_delta > 0 {
-                        label = format!("{}+{}", label, var_delta);
-                    }
-                } else if delta > 0 {
-                    label = format!("{}+{}", label, delta);
-                }
-            }
-
-            if let (Some(s_name), Some(f_name)) = (resolved_struct_name.clone(), resolved_field_name) {
-                return Some(NodeInfo {
-                    label: format!("{}::{}", s_name, f_name),
-                    typ,
-                    offset: final_offset as i64,
-                    struct_name: Some(s_name),
-                    dims: declared_dims.clone(),
-                    elem_size: declared_elem,
-                });
-            } else {
-                return Some(NodeInfo {
-                    label,
-                    typ,
-                    offset: final_offset as i64,
-                    struct_name: resolved_struct_name, // Fix: Preserve struct_name even if it's an array instance
-                    dims: declared_dims.clone(),
-                    elem_size: declared_elem,
-                });
-            }
-        }
+    if size == 0 {
+        return None;
     }
-    None
+    addr.checked_add(size)?;
+    let (&var_addr, var) = vars.range(..=addr).next_back()?;
+    let delta = addr.checked_sub(var_addr)?;
+    if delta.checked_add(size)? > known_size(&var.typ, types)? {
+        return None;
+    }
+    let (base, dims) = type_shape(&var.typ)?;
+    let elem_size = known_size(&base, types)?;
+    let mut label = var.name.clone();
+    let within = if dims.is_empty() {
+        delta
+    } else {
+        let within = delta % elem_size;
+        if within.checked_add(size)? > elem_size {
+            return None;
+        }
+        append_indices(&mut label, delta / elem_size, &dims);
+        within
+    };
+    let mut member = None;
+    let typ = resolve_leaf(&base, within, size, types, &mut label, &mut member, 0)?;
+    Some(NodeInfo {
+        label,
+        typ,
+        offset: within as i64,
+        struct_name: types.get(&base).map(|st| st.name.clone()),
+        elem_size: if dims.is_empty() { 0 } else { elem_size },
+        dims,
+        byte_size: size,
+        base_address: var_addr,
+        member,
+    })
 }
 
 fn escape_dot_string(s: &str) -> String {
@@ -539,15 +505,21 @@ fn main() {
             println!("dbg-viewtype finished successfully.");
         }
         Ok(s) => {
-            eprintln!("Warning: dbg-viewtype exited with status {}", s);
+            eprintln!("Error: dbg-viewtype exited with status {}", s);
+            exit(1);
         }
         Err(e) => {
-            eprintln!("Warning: failed to execute dbg-viewtype: {}", e);
+            eprintln!("Error: failed to execute dbg-viewtype: {}", e);
+            exit(1);
         }
     }
 
     let types_map = parse_types(type_out);
     let vars_map = parse_vars(var_out);
+    if vars_map.is_empty() {
+        eprintln!("Error: DWARF contains no resolvable global variables");
+        exit(1);
+    }
 
     // Clean up the temporary files so they don't pollute the repository
     let _ = std::fs::remove_file(type_out);
@@ -565,6 +537,8 @@ fn main() {
     let mut window_hist: VecDeque<(Access, NodeInfo)> = VecDeque::new();
     let window_max: usize = if config.window == 0 { 1 } else { 4096 };
     let mut warn_limit = 0;
+    let mut parsed_accesses = 0u64;
+    let mut resolved_accesses = 0u64;
 
     for line in reader.lines() {
         let line = match line {
@@ -577,7 +551,11 @@ fn main() {
         }
 
         if let Some(curr_acc) = Access::parse(line) {
-            if let Some(curr_info) = resolve_access(curr_acc.addr, &vars_map, &types_map) {
+            parsed_accesses += 1;
+            if let Some(curr_info) =
+                resolve_access(curr_acc.addr, curr_acc.size, &vars_map, &types_map)
+            {
+                resolved_accesses += 1;
                 node_map
                     .entry(curr_info.label.clone())
                     .or_insert_with(|| curr_info.clone());
@@ -615,22 +593,20 @@ fn main() {
                     stat.addr1 = addr1;
                     stat.addr2 = addr2;
 
-                    let same_line = (prev_acc.addr / config.cache_line_size)
-                        == (curr_acc.addr / config.cache_line_size);
-
-                    if prev_acc.core_id != curr_acc.core_id {
-                        if prev_acc.rw == Rw::Write {
-                            if same_line {
-                                stat.count1 += 1;
-                            } else {
-                                stat.count2 += 1;
-                            }
-                        } else {
-                            stat.count3 += 1;
-                        }
-                    } else {
-                        stat.count4 += 1;
+                    let (bucket, overlaps) =
+                        classify_pair(prev_acc, &curr_acc, config.cache_line_size);
+                    match bucket {
+                        1 => stat.count1 += 1,
+                        2 => stat.count2 += 1,
+                        3 => stat.count3 += 1,
+                        _ => stat.count4 += 1,
                     }
+                    // False sharing requires the same physical cache line.  A
+                    // different-address pair in bucket 2 is cross-line traffic,
+                    // not false sharing.
+                    let (true_alpha, false_alpha) = sharing_provenance(bucket, overlaps);
+                    stat.true_alpha += true_alpha;
+                    stat.false_alpha += false_alpha;
                 }
                 window_hist.push_back((curr_acc, curr_info));
                 while window_hist.len() > window_max {
@@ -638,7 +614,10 @@ fn main() {
                 }
             } else {
                 if warn_limit < 20 {
-                    eprintln!("Warning: could not resolve label for addr 0x{:x}", curr_acc.addr);
+                    eprintln!(
+                        "Warning: could not resolve label for addr 0x{:x}",
+                        curr_acc.addr
+                    );
                     warn_limit += 1;
                     if warn_limit == 20 {
                         eprintln!("Warning: could not resolve label for addr... (silencing further warnings)");
@@ -648,7 +627,16 @@ fn main() {
         }
     }
 
-
+    println!(
+        "[accesses] parsed={} resolved={} skipped={}",
+        parsed_accesses,
+        resolved_accesses,
+        parsed_accesses - resolved_accesses
+    );
+    if resolved_accesses == 0 {
+        eprintln!("Error: no accesses resolved within known object/member bounds");
+        exit(1);
+    }
 
     let mut groups: std::collections::HashSet<Option<String>> = std::collections::HashSet::new();
     for info in node_map.values() {
@@ -657,7 +645,7 @@ fn main() {
             groups.insert(Some(format!("{}.fields", sname)));
             added = true;
         }
-        if let Some(idx) = info.label.find('[') {
+        if let Some(idx) = info.label.find('[').filter(|_| !info.dims.is_empty()) {
             groups.insert(Some(info.label[..idx].to_string()));
             added = true;
         }
@@ -667,10 +655,24 @@ fn main() {
     }
 
     let out_path = std::path::Path::new(&config.output);
-    let parent = out_path.parent().unwrap_or_else(|| std::path::Path::new(""));
-    let stem = out_path.file_stem().unwrap_or_default().to_str().unwrap_or_default();
-    let ext = out_path.extension().unwrap_or_default().to_str().unwrap_or_default();
-    let ext_with_dot = if ext.is_empty() { String::new() } else { format!(".{}", ext) };
+    let parent = out_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new(""));
+    let stem = out_path
+        .file_stem()
+        .unwrap_or_default()
+        .to_str()
+        .unwrap_or_default();
+    let ext = out_path
+        .extension()
+        .unwrap_or_default()
+        .to_str()
+        .unwrap_or_default();
+    let ext_with_dot = if ext.is_empty() {
+        String::new()
+    } else {
+        format!(".{}", ext)
+    };
 
     for group_opt in groups {
         let output_file_path = match &group_opt {
@@ -694,21 +696,29 @@ fn main() {
                     Some(ref g) => {
                         if g.ends_with(".fields") {
                             if let Some(sname) = &info.struct_name {
-                                if g == &format!("{}.fields", sname) { return true; }
+                                if g == &format!("{}.fields", sname) {
+                                    return true;
+                                }
                             }
                         } else {
-                            if let Some(idx) = l.find('[') {
-                                if g == &l[..idx] { return true; }
+                            if let Some(idx) = l.find('[').filter(|_| !info.dims.is_empty()) {
+                                if g == &l[..idx] {
+                                    return true;
+                                }
                             }
                         }
                         false
                     }
                 }
             };
-            let include_edge = belongs_to(info1, l1, &group_opt) || belongs_to(info2, l2, &group_opt);
+            // Analysis graphs are closed subgraphs.  Pulling an external endpoint
+            // into graph.dot made struct fields look like standalone globals and
+            // also injected cross-object scheduling noise into array decisions.
+            let include_edge =
+                belongs_to(info1, l1, &group_opt) && belongs_to(info2, l2, &group_opt);
 
             if include_edge {
-                group_edges.push(((l1.clone(), l2.clone()), stat.clone()));
+                group_edges.push(((l1.clone(), l2.clone()), stat));
                 group_nodes_set.insert(l1.clone());
                 group_nodes_set.insert(l2.clone());
             }
@@ -720,11 +730,15 @@ fn main() {
                 Some(ref g) => {
                     if g.ends_with(".fields") {
                         if let Some(sname) = &info.struct_name {
-                            if g == &format!("{}.fields", sname) { return true; }
+                            if g == &format!("{}.fields", sname) {
+                                return true;
+                            }
                         }
                     } else {
-                        if let Some(idx) = l.find('[') {
-                            if g == &l[..idx] { return true; }
+                        if let Some(idx) = l.find('[').filter(|_| !info.dims.is_empty()) {
+                            if g == &l[..idx] {
+                                return true;
+                            }
                         }
                     }
                     false
@@ -753,8 +767,8 @@ fn main() {
             if let Some(ref g) = group_opt {
                 if g.ends_with(".fields") {
                     if let Some(ref info_sname) = info.struct_name {
-                        if let Some(idx) = lbl.rfind('.') {
-                            return format!("{}::{}", info_sname, &lbl[idx + 1..]);
+                        if let Some(member) = &info.member {
+                            return format!("{}::{}", info_sname, member.name);
                         }
                     }
                 }
@@ -762,14 +776,48 @@ fn main() {
             lbl
         };
 
-        let mut abstract_nodes: std::collections::HashMap<String, NodeInfo> = std::collections::HashMap::new();
+        let mut abstract_nodes: std::collections::HashMap<String, NodeInfo> =
+            std::collections::HashMap::new();
         for lbl in group_nodes_set {
             if let Some(info) = node_map.get(&lbl) {
                 let albl = abstract_label(lbl.clone(), info);
                 if !abstract_nodes.contains_key(&albl) {
                     let mut ainfo = info.clone();
                     ainfo.label = albl.clone();
+                    if group_opt.as_ref().is_some_and(|g| g.ends_with(".fields")) {
+                        if let Some(member) = &info.member {
+                            ainfo.typ = member.typ.clone();
+                            ainfo.offset = member.offset as i64;
+                            ainfo.byte_size = known_size(&member.typ, &types_map).unwrap_or(0);
+                            ainfo.base_address = 0;
+                            ainfo.dims.clear();
+                            ainfo.elem_size = 0;
+                        }
+                    }
                     abstract_nodes.insert(albl, ainfo);
+                }
+            }
+        }
+
+        // Dynamic tracing cannot discover cold fields.  Complete field graphs
+        // from DWARF so a recommended struct layout never drops unobserved data.
+        if let Some(group_name) = &group_opt {
+            if let Some(struct_name) = group_name.strip_suffix(".fields") {
+                if let Some(struct_type) = types_map.get(struct_name) {
+                    for member in struct_type.members.values() {
+                        let label = format!("{}::{}", struct_name, member.name);
+                        abstract_nodes.entry(label.clone()).or_insert(NodeInfo {
+                            label,
+                            typ: member.typ.clone(),
+                            offset: member.offset as i64,
+                            struct_name: Some(struct_name.to_string()),
+                            dims: Vec::new(),
+                            elem_size: 0,
+                            byte_size: known_size(&member.typ, &types_map).unwrap_or(0),
+                            base_address: 0,
+                            member: Some(member.clone()),
+                        });
+                    }
                 }
             }
         }
@@ -779,11 +827,21 @@ fn main() {
 
         for info in nodes {
             let mut attributes = format!(
-                "label=\"{}\", type=\"{}\", offset={}",
+                "label=\"{}\", type=\"{}\", offset={}, size={}, base_address={}",
                 escape_dot_string(&info.label),
                 escape_dot_string(&info.typ),
-                info.offset
+                info.offset,
+                info.byte_size,
+                info.base_address
             );
+            if let Some(member) = &info.member {
+                attributes.push_str(&format!(
+                    ", field=\".{}\", field_offset={}, field_size={}",
+                    escape_dot_string(&member.name),
+                    member.offset,
+                    known_size(&member.typ, &types_map).unwrap_or(0)
+                ));
+            }
             if !info.dims.is_empty() {
                 let declared: Vec<String> = info.dims.iter().map(|d| d.to_string()).collect();
                 attributes.push_str(&format!(", dims=\"{}\"", declared.join(",")));
@@ -791,33 +849,45 @@ fn main() {
             if info.elem_size > 0 {
                 attributes.push_str(&format!(", elem_size={}", info.elem_size));
             }
-            writeln!(out, "  \"{}\" [{}];", escape_dot_string(&info.label), attributes).unwrap();
+            writeln!(
+                out,
+                "  \"{}\" [{}];",
+                escape_dot_string(&info.label),
+                attributes
+            )
+            .unwrap();
         }
         writeln!(out, "").unwrap();
 
-        let mut aggregated_edges: std::collections::HashMap<(String, String), EdgeStat> = std::collections::HashMap::new();
+        let mut aggregated_edges: std::collections::HashMap<(String, String), EdgeStat> =
+            std::collections::HashMap::new();
         for ((l1, l2), stat) in group_edges {
             let info1 = node_map.get(&l1).unwrap();
             let info2 = node_map.get(&l2).unwrap();
             let al1 = abstract_label(l1.clone(), info1);
             let al2 = abstract_label(l2.clone(), info2);
-            
-            let (k1, k2, is_swapped) = if al1 <= al2 { (al1, al2, false) } else { (al2, al1, true) };
-            
+
+            let (k1, k2) = if al1 <= al2 { (al1, al2) } else { (al2, al1) };
+
             let e = aggregated_edges.entry((k1, k2)).or_insert(EdgeStat {
-                addr1: stat.addr1, addr2: stat.addr2,
-                count1: 0, count2: 0, count3: 0, count4: 0,
+                addr1: stat.addr1,
+                addr2: stat.addr2,
+                count1: 0,
+                count2: 0,
+                count3: 0,
+                count4: 0,
+                true_alpha: 0,
+                false_alpha: 0,
             });
-            
-            if is_swapped {
-                e.count1 += stat.count2;
-                e.count2 += stat.count1;
-            } else {
-                e.count1 += stat.count1;
-                e.count2 += stat.count2;
-            }
+
+            // count1/count2 describe cache-line geometry, not endpoint order.
+            // Canonicalising an undirected key must never exchange them.
+            e.count1 += stat.count1;
+            e.count2 += stat.count2;
             e.count3 += stat.count3;
             e.count4 += stat.count4;
+            e.true_alpha += stat.true_alpha;
+            e.false_alpha += stat.false_alpha;
         }
 
         let mut final_edges: Vec<_> = aggregated_edges.into_iter().collect();
@@ -830,8 +900,12 @@ fn main() {
 
             let alpha = stat.count1 + stat.count2;
             let beta = stat.count3 + stat.count4;
-            let same_line = (stat.addr1 / config.cache_line_size) == (stat.addr2 / config.cache_line_size);
-            let alpha_kind = if same_line { "①" } else { "②" };
+            let alpha_kind = match (stat.count1 > 0, stat.count2 > 0) {
+                (true, true) => "mixed",
+                (true, false) => "①",
+                (false, true) => "②",
+                (false, false) => "none",
+            };
 
             writeln!(
                 out,
@@ -847,10 +921,113 @@ fn main() {
             writeln!(out, "    count2={},", stat.count2).unwrap();
             writeln!(out, "    count3={},", stat.count3).unwrap();
             writeln!(out, "    count4={},", stat.count4).unwrap();
+            writeln!(out, "    true_alpha={},", stat.true_alpha).unwrap();
+            writeln!(out, "    false_alpha={},", stat.false_alpha).unwrap();
             writeln!(out, "    alpha_kind=\"{}\"", alpha_kind).unwrap();
             writeln!(out, "  ];").unwrap();
         }
 
         writeln!(out, "}}").unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn access(addr: u64, rw: Rw, core_id: u32, thread_id: u64) -> Access {
+        Access {
+            time: 0,
+            addr,
+            rw,
+            size: 8,
+            core_id,
+            thread_id,
+        }
+    }
+
+    #[test]
+    fn category_one_covers_cross_worker_write_on_same_line() {
+        let prev = access(0x100, Rw::Write, 0, 10);
+        let curr = access(0x108, Rw::Read, 1, 11);
+        assert_eq!(classify_pair(&prev, &curr, 64), (1, false));
+    }
+
+    #[test]
+    fn read_then_write_is_invalidation_not_read_only_affinity() {
+        let prev = access(0x100, Rw::Read, 0, 10);
+        let curr = access(0x108, Rw::Write, 1, 11);
+        assert_eq!(classify_pair(&prev, &curr, 64), (1, false));
+    }
+
+    #[test]
+    fn overlapping_address_is_true_sharing() {
+        let prev = access(0x100, Rw::Write, 0, 10);
+        let curr = access(0x104, Rw::Read, 1, 11);
+        assert_eq!(classify_pair(&prev, &curr, 64), (1, true));
+    }
+
+    #[test]
+    fn migration_of_one_thread_is_not_cross_worker_contention() {
+        let prev = access(0x100, Rw::Write, 0, 10);
+        let curr = access(0x108, Rw::Read, 1, 10);
+        assert_eq!(classify_pair(&prev, &curr, 64), (4, false));
+    }
+
+    #[test]
+    fn cross_line_pair_is_not_false_sharing() {
+        assert_eq!(sharing_provenance(2, false), (0, 0));
+        assert_eq!(sharing_provenance(1, false), (0, 1));
+        assert_eq!(sharing_provenance(1, true), (1, 0));
+    }
+
+    #[test]
+    fn spanning_access_shares_its_second_cacheline() {
+        let prev = access(0x13c, Rw::Read, 0, 10);
+        let curr = access(0x140, Rw::Write, 1, 11);
+        assert_eq!(classify_pair(&prev, &curr, 64), (1, true));
+    }
+
+    #[test]
+    fn array_struct_offset_is_relative_to_one_element() {
+        let mut vars = BTreeMap::new();
+        vars.insert(
+            0x1000,
+            GlobalVar {
+                name: "entities".to_string(),
+                typ: "Entity[2][2]".to_string(),
+            },
+        );
+        let mut members = BTreeMap::new();
+        members.insert(
+            0,
+            StructMember {
+                offset: 0,
+                name: "health".to_string(),
+                typ: "long".to_string(),
+            },
+        );
+        members.insert(
+            64,
+            StructMember {
+                offset: 64,
+                name: "mana".to_string(),
+                typ: "long".to_string(),
+            },
+        );
+        let mut types = HashMap::new();
+        types.insert(
+            "Entity".to_string(),
+            StructType {
+                name: "Entity".to_string(),
+                size: 320,
+                members,
+            },
+        );
+        let info = resolve_access(0x1000 + 320 + 64, 8, &vars, &types).unwrap();
+        assert_eq!(info.label, "entities[0][1].mana");
+        assert_eq!(info.offset, 64);
+        assert_eq!(info.dims, vec![2, 2]);
+        assert_eq!(info.elem_size, 320);
     }
 }

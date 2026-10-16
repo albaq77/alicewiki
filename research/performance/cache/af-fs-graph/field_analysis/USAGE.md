@@ -65,6 +65,6 @@ FA_TRACE_DIR=/tmp/my_traces TRACE_SAMPLE_RATE=10 ./app
 程序运行结束后，您在目录里就能看到生成的 `access_trace_*.csv`。
 直接用 `cat` 或 `head` 查看，里面就是完全适配您 Rust `generator` 期望的纯净格式：
 ```csv
-164324234567,0x408200,W,8,2
+164324234567,0x408200,W,8,2,14567
 ```
 然后您就可以拿着这个文件，直接喂给您的图计算工具去跑了！

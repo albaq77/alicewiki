@@ -1,0 +1,9 @@
+# Local implementation history; maintained source documentation lives in README files.
+/state.md
+/todo.md
+
+# Outputs when the analysis tools run from this directory.
+/graph*.dot
+/graph*.txt
+/graph*.decision.json
+/trace*.csv

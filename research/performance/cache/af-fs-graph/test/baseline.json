@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "trace": {
+    "source": "test_fields2.cpp",
+    "iterations": 10,
+    "lines": 55361,
+    "window_ns": 30000,
+    "k": 1,
+    "g": 15,
+    "gamma": 10,
+    "cacheline": 64
+  },
+  "legacy_scores_before_s4_9": {
+    "matrix_2d": {
+      "dimensions": [[18.4833, 60], [-185.8125, 48]]
+    },
+    "tensor_3d": {
+      "dimensions": [[18.4717, 240], [-185.5781, 192], [19.9271, 192]]
+    },
+    "entity_arr": {
+      "dimensions": [[5.4780, 600], [-59.3601, 404], [5.6693, 576]]
+    },
+    "weapon_arr": {
+      "dimensions": [[4.6650, 360], [-75.9972, 250], [4.4481, 320]]
+    }
+  },
+  "geometry_truth": {
+    "matrix_2d": "transpose",
+    "tensor_3d": "pending_measurement",
+    "entity_arr": "keep",
+    "weapon_arr": "keep"
+  }
+}

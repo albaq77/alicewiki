@@ -1,0 +1,828 @@
+{
+  "schema_version": 1,
+  "origin": "test_fields2.cpp, captured review run 2026-10-16; replaces missing legacy trace for active regression",
+  "trace_sha256": "6f44040433bc6d4c4240121ad2b60685fec02303e2275e16ba48ed4d6f8119b6",
+  "source_sha256": "6cb01fe15dd211fc29be259401a015deb594f61032a569d64a2fb33f63139245",
+  "parameters": {
+    "window_ns": 30000,
+    "k": 1,
+    "g": 15,
+    "gamma": 10,
+    "line": 64
+  },
+  "inputs_sha256": {
+    "trace.csv.gz": "5b17d5c433db931c4a41f298fae1856a0ecff38049070cd72b41250cecd851d2",
+    "types.txt": "84d9ce0cf074c1b349e94a753d084cf8dbc4d5912c0081a23a01a41c054c62c6",
+    "vars.txt": "259ddf8fe35c47e38a09529c3fb5d64ad5afba717fa0a00eca5b1e25c52694bf"
+  },
+  "snapshot": {
+    "trace_rows": 55379,
+    "threads": 5,
+    "cores": 5,
+    "arrays": {
+      "matrix_2d": {
+        "action": "axis_permutation",
+        "axis_order": [
+          1,
+          0
+        ],
+        "current_score": -1446.2999999999975,
+        "selected_score": 1076.7,
+        "candidates": 2,
+        "shared_lines": 16
+      },
+      "tensor_3d": {
+        "action": "axis_permutation",
+        "axis_order": [
+          1,
+          0,
+          2
+        ],
+        "current_score": 15240.900000000205,
+        "selected_score": 23484.200000001718,
+        "candidates": 5,
+        "shared_lines": 16
+      },
+      "entity_arr": {
+        "action": "partial_soa",
+        "axis_order": [
+          1,
+          0
+        ],
+        "current_score": 16900.700000003315,
+        "selected_score": 19810.400000004996,
+        "candidates": 24,
+        "shared_lines": 0
+      },
+      "weapon_arr": {
+        "action": "partial_soa",
+        "axis_order": [
+          1,
+          0
+        ],
+        "current_score": 9116.999999999205,
+        "selected_score": 9492.299999999359,
+        "candidates": 16,
+        "shared_lines": 0
+      }
+    },
+    "status": "passed",
+    "outputs_sha256": {
+      "graph.ComplexEntity.fields.dot": "0c99890a9e13cf3848b0375be2e8b4bbc62336d4572bf288988454c9c1314a95",
+      "graph.ComplexEntity.layout.txt": "4b6a20675a018fa878b577a1b881c87fbb6cbb9bbf7d806782953693d21a6249",
+      "graph.GameConfig.fields.dot": "680fa27d23f7176b77a14946936cb91ae336e2032908865202b6c06e3c174f95",
+      "graph.GameConfig.layout.txt": "0418c6cd951b97dda6f7ba811ff0ad66834b26600abf1637157662ec83137818",
+      "graph.WeaponStats.fields.dot": "9762a3d25dcb752728fb98634a43bda9815e05d40a7804e430ba51b1a2303de4",
+      "graph.WeaponStats.layout.txt": "28ae41b1082df82bb8fb970ba4e84ccaef081a0d5345bc12ae115747c7fa89cb",
+      "graph.dot": "abb7dc251a8da5f46d059d411e0f0b78b24d7b845cafa6cdd71693a4be97e1d3",
+      "graph.entity_arr.dot": "a1e54228d86d431988c69fbbf7eb05e0ac204cf46fb3542b9407713a663efff7",
+      "graph.entity_arr.txt": "c2f6cbb5f077c25e6cda8ab6ed951057b01358c6eccf693bc560efd8fafa2f0f",
+      "graph.layout.txt": "85138cb032e6c41be7aec77af4adfd865029d3c26a836a7bf99d752be8513e89",
+      "graph.matrix_2d.dot": "ffc8ddf9be0d5c9955be9d1059221687b7e443e0da9e735284fd4895dcfe7ee3",
+      "graph.matrix_2d.txt": "f1814c82fd290a4e4dee7089c75c606ff2509575def1f52cbd4926e0dc8ae71e",
+      "graph.placement.txt": "a9deb63edcfbcaba1da9ef79092c1814e767cd069f3317adaef2dc31ee1a8586",
+      "graph.tensor_3d.dot": "dfe417c8536ca772ad211bdb50f1a84a6f3bffa69a4ebff4dd868abaab8ee6d2",
+      "graph.tensor_3d.txt": "eaa71e32cea018c181220f19811e5c9753b828a02f5d3966c801fbeda539fa7c",
+      "graph.weapon_arr.dot": "3591bdb82770117fff81330b00a6dd93b905550cb122371449c5386b0f26251b",
+      "graph.weapon_arr.txt": "766d280e977adbbaa6821ce74fd607d87e6825a2b8af73a7cd967a40383052c9"
+    },
+    "decisions": {
+      "graph.entity_arr.decision.json": {
+        "schema_version": 2,
+        "current_dimension": "dim2",
+        "selected_dimension": null,
+        "selected_field": ".health",
+        "action": "partial_soa",
+        "reason": "full-graph candidate re-evaluation found a positive improvement",
+        "current_score": 16900.700000003315,
+        "selected_score": 19810.400000004996,
+        "axis_order": [
+          1,
+          0
+        ],
+        "element_stride": 320,
+        "field_stride": 8,
+        "candidates": [
+          {
+            "name": "axes:[0, 1]",
+            "action": "keep",
+            "dimension": "dim2",
+            "field": null,
+            "score": 16900.700000003315,
+            "edges": 35727,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 320,
+            "field_stride": null
+          },
+          {
+            "name": "axes:[1, 0]",
+            "action": "axis_permutation",
+            "dimension": "dim0",
+            "field": null,
+            "score": 16900.700000003315,
+            "edges": 35727,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 320,
+            "field_stride": null
+          },
+          {
+            "name": "instance-padding:[0, 1]",
+            "action": "instance_padding",
+            "dimension": null,
+            "field": null,
+            "score": 18282.200000003897,
+            "edges": 35727,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 320,
+            "field_stride": null
+          },
+          {
+            "name": "instance-padding:[1, 0]",
+            "action": "instance_padding",
+            "dimension": null,
+            "field": null,
+            "score": 18282.200000003897,
+            "edges": 35727,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 320,
+            "field_stride": null
+          },
+          {
+            "name": "partial-soa:.experience:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".experience",
+            "score": 16877.400000003217,
+            "edges": 35727,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.experience:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".experience",
+            "score": 17481.20000000357,
+            "edges": 35727,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.gold:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".gold",
+            "score": 16878.300000003215,
+            "edges": 35727,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.gold:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".gold",
+            "score": 17483.90000000357,
+            "edges": 35727,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.health:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".health",
+            "score": 15352.800000002051,
+            "edges": 35727,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.health:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".health",
+            "score": 19810.400000004996,
+            "edges": 35727,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.level:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".level",
+            "score": 16877.400000003217,
+            "edges": 35727,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.level:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".level",
+            "score": 17481.20000000357,
+            "edges": 35727,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.mana:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".mana",
+            "score": 15367.900000002051,
+            "edges": 35727,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.mana:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".mana",
+            "score": 19809.500000005,
+            "edges": 35727,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.pos_x:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".pos_x",
+            "score": 17493.400000003552,
+            "edges": 35727,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.pos_x:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".pos_x",
+            "score": 18340.700000003984,
+            "edges": 35727,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.pos_y:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".pos_y",
+            "score": 17223.00000000346,
+            "edges": 35727,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.pos_y:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".pos_y",
+            "score": 18130.100000003906,
+            "edges": 35727,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.score:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".score",
+            "score": 16877.400000003217,
+            "edges": 35727,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.score:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".score",
+            "score": 17481.200000003573,
+            "edges": 35727,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.velocity_x:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".velocity_x",
+            "score": 16763.100000003247,
+            "edges": 35727,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.velocity_x:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".velocity_x",
+            "score": 17669.300000003856,
+            "edges": 35727,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.velocity_y:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".velocity_y",
+            "score": 16762.200000003246,
+            "edges": 35727,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.velocity_y:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".velocity_y",
+            "score": 17668.400000003854,
+            "edges": 35727,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 320,
+            "field_stride": 8
+          }
+        ]
+      },
+      "graph.matrix_2d.decision.json": {
+        "schema_version": 2,
+        "current_dimension": "dim1",
+        "selected_dimension": "dim0",
+        "selected_field": null,
+        "action": "axis_permutation",
+        "reason": "full-graph candidate re-evaluation found a positive improvement",
+        "current_score": -1446.2999999999975,
+        "selected_score": 1076.7,
+        "axis_order": [
+          1,
+          0
+        ],
+        "element_stride": 8,
+        "field_stride": null,
+        "candidates": [
+          {
+            "name": "axes:[0, 1]",
+            "action": "keep",
+            "dimension": "dim1",
+            "field": null,
+            "score": -1446.2999999999975,
+            "edges": 892,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 8,
+            "field_stride": null
+          },
+          {
+            "name": "axes:[1, 0]",
+            "action": "axis_permutation",
+            "dimension": "dim0",
+            "field": null,
+            "score": 1076.7,
+            "edges": 892,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 8,
+            "field_stride": null
+          }
+        ]
+      },
+      "graph.tensor_3d.decision.json": {
+        "schema_version": 2,
+        "current_dimension": "dim2",
+        "selected_dimension": "dim2",
+        "selected_field": null,
+        "action": "axis_permutation",
+        "reason": "full-graph candidate re-evaluation found a positive improvement",
+        "current_score": 15240.900000000205,
+        "selected_score": 23484.200000001718,
+        "axis_order": [
+          1,
+          0,
+          2
+        ],
+        "element_stride": 8,
+        "field_stride": null,
+        "candidates": [
+          {
+            "name": "axes:[0, 1, 2]",
+            "action": "keep",
+            "dimension": "dim2",
+            "field": null,
+            "score": 15240.900000000205,
+            "edges": 14011,
+            "axis_order": [
+              0,
+              1,
+              2
+            ],
+            "element_stride": 8,
+            "field_stride": null
+          },
+          {
+            "name": "axes:[1, 2, 0]",
+            "action": "axis_permutation",
+            "dimension": "dim0",
+            "field": null,
+            "score": 12824.79999999995,
+            "edges": 14011,
+            "axis_order": [
+              1,
+              2,
+              0
+            ],
+            "element_stride": 8,
+            "field_stride": null
+          },
+          {
+            "name": "axes:[1, 0, 2]",
+            "action": "axis_permutation",
+            "dimension": "dim2",
+            "field": null,
+            "score": 23484.200000001718,
+            "edges": 14011,
+            "axis_order": [
+              1,
+              0,
+              2
+            ],
+            "element_stride": 8,
+            "field_stride": null
+          },
+          {
+            "name": "axes:[0, 2, 1]",
+            "action": "axis_permutation",
+            "dimension": "dim1",
+            "field": null,
+            "score": 98.40000000018036,
+            "edges": 14011,
+            "axis_order": [
+              0,
+              2,
+              1
+            ],
+            "element_stride": 8,
+            "field_stride": null
+          },
+          {
+            "name": "axes:[2, 0, 1]",
+            "action": "axis_permutation",
+            "dimension": "dim1",
+            "field": null,
+            "score": 98.40000000018036,
+            "edges": 14011,
+            "axis_order": [
+              2,
+              0,
+              1
+            ],
+            "element_stride": 8,
+            "field_stride": null
+          }
+        ]
+      },
+      "graph.weapon_arr.decision.json": {
+        "schema_version": 2,
+        "current_dimension": "dim2",
+        "selected_dimension": null,
+        "selected_field": ".base_damage",
+        "action": "partial_soa",
+        "reason": "full-graph candidate re-evaluation found a positive improvement",
+        "current_score": 9116.999999999205,
+        "selected_score": 9492.299999999359,
+        "axis_order": [
+          1,
+          0
+        ],
+        "element_stride": 240,
+        "field_stride": 8,
+        "candidates": [
+          {
+            "name": "axes:[0, 1]",
+            "action": "keep",
+            "dimension": "dim2",
+            "field": null,
+            "score": 9116.999999999205,
+            "edges": 15783,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 240,
+            "field_stride": null
+          },
+          {
+            "name": "axes:[1, 0]",
+            "action": "axis_permutation",
+            "dimension": "dim0",
+            "field": null,
+            "score": 9116.999999999205,
+            "edges": 15783,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 240,
+            "field_stride": null
+          },
+          {
+            "name": "instance-padding:[0, 1]",
+            "action": "instance_padding",
+            "dimension": null,
+            "field": null,
+            "score": 9116.999999999205,
+            "edges": 15783,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 256,
+            "field_stride": null
+          },
+          {
+            "name": "instance-padding:[1, 0]",
+            "action": "instance_padding",
+            "dimension": null,
+            "field": null,
+            "score": 9116.999999999205,
+            "edges": 15783,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 256,
+            "field_stride": null
+          },
+          {
+            "name": "partial-soa:.attack_speed:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".attack_speed",
+            "score": 8057.799999999057,
+            "edges": 15783,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 240,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.attack_speed:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".attack_speed",
+            "score": 8963.99999999915,
+            "edges": 15783,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 240,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.base_damage:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".base_damage",
+            "score": 5066.699999999413,
+            "edges": 15783,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 240,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.base_damage:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".base_damage",
+            "score": 9492.299999999359,
+            "edges": 15783,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 240,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.critical_chance:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".critical_chance",
+            "score": 8057.799999999057,
+            "edges": 15783,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 240,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.critical_chance:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".critical_chance",
+            "score": 8963.999999999152,
+            "edges": 15783,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 240,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.durability:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".durability",
+            "score": 5081.7999999993945,
+            "edges": 15783,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 240,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.durability:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".durability",
+            "score": 9488.699999999357,
+            "edges": 15783,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 240,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.element_type:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".element_type",
+            "score": 8644.999999999081,
+            "edges": 15783,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 240,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.element_type:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".element_type",
+            "score": 8947.79999999912,
+            "edges": 15783,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 240,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.weight:[0, 1]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".weight",
+            "score": 8403.399999999045,
+            "edges": 15783,
+            "axis_order": [
+              0,
+              1
+            ],
+            "element_stride": 240,
+            "field_stride": 8
+          },
+          {
+            "name": "partial-soa:.weight:[1, 0]",
+            "action": "partial_soa",
+            "dimension": null,
+            "field": ".weight",
+            "score": 9008.999999999167,
+            "edges": 15783,
+            "axis_order": [
+              1,
+              0
+            ],
+            "element_stride": 240,
+            "field_stride": 8
+          }
+        ]
+      }
+    }
+  }
+}

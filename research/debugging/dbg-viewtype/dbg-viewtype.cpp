@@ -1,7 +1,4 @@
 //
-#include <cpp/unisym>
-#include <c/file.h>
-#include <c/consio.h>
 #undef _ASM
 #include <fcntl.h>
 #include <libelf.h>
@@ -12,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 #include <iomanip>
+#include <fstream>
 
 // 存储提取出的 DIE 信息
 struct DieInfo {
@@ -112,35 +110,34 @@ void process_die_data(Dwarf_Debug dbg, Dwarf_Die die, DieInfo& info) {
 			// 1. 获取位置列表头
 			if (dwarf_get_loclist_c(attr, &loc_head, &loc_cnt, &err) == DW_DLV_OK) {
 				if (loc_cnt > 0) {
-					// 严格匹配 _e 接口所需要的参数
+					// libdwarf 20210528 uses the _d interface.
 					Dwarf_Small lle_value = 0;
 					Dwarf_Unsigned rawlowpc = 0, rawhipc = 0;
 					Dwarf_Bool debug_addr_unavailable = 0; 
 					Dwarf_Addr lowpc_cooked = 0, hipc_cooked = 0;
 					Dwarf_Unsigned locexpr_op_count = 0;
-					Dwarf_Unsigned lle_bytecount = 0; // <-- 补上这个导致串位的罪魁祸首！
 					Dwarf_Locdesc_c locdesc = nullptr;
 					Dwarf_Small loclist_source = 0;
 					Dwarf_Unsigned expression_offset = 0;
 					Dwarf_Unsigned locdesc_offset = 0;
 					
-					// 2. 调用最新版 _e 接口 (完全按照参数顺序对齐)
-					if (dwarf_get_locdesc_entry_e(
+					if (dwarf_get_locdesc_entry_d(
 							loc_head, 0, // 仅取第一个条目
 							&lle_value, &rawlowpc, &rawhipc,
 							&debug_addr_unavailable, &lowpc_cooked, &hipc_cooked,
 							&locexpr_op_count,
-							&lle_bytecount,      // <-- 放入正确的位置
 							&locdesc,
 							&loclist_source, &expression_offset, &locdesc_offset,
 							&err) == DW_DLV_OK) {
 						
 						if (locexpr_op_count > 0) {
 							Dwarf_Small op = 0;
-							Dwarf_Unsigned op1 = 0, op2 = 0, op3 = 0, offset = 0;
+								Dwarf_Unsigned op1 = 0, op2 = 0, op3 = 0, offset = 0;
+								Dwarf_Unsigned raw1 = 0, raw2 = 0, raw3 = 0;
 							
 							// 3. 读取具体的操作码
-							if (dwarf_get_location_op_value_c(locdesc, 0, &op, &op1, &op2, &op3, &offset, &err) == DW_DLV_OK) {
+								if (dwarf_get_location_op_value_d(locdesc, 0, &op, &op1, &op2, &op3,
+										&raw1, &raw2, &raw3, &offset, &err) == DW_DLV_OK) {
 								if (op == DW_OP_addr) {
 									// 拿到全局变量的虚拟内存地址！
 									info.addr = op1; 
@@ -151,7 +148,7 @@ void process_die_data(Dwarf_Debug dbg, Dwarf_Die die, DieInfo& info) {
 					}
 				}
 				// 4. 清理位置列表内存
-				dwarf_dealloc_loc_head_c(loc_head);
+				dwarf_loc_head_c_dealloc(loc_head);
 			}
 			dwarf_dealloc(dbg, attr, DW_DLA_ATTR);
 		}
@@ -300,7 +297,7 @@ Dwarf_Off get_real_type(Dwarf_Off type_offset) {
 }
 
 // 递归展开结构体成员的引擎
-void print_struct_members_recursively(uni::OstreamTrait& out, Dwarf_Off struct_type_offset, Dwarf_Unsigned base_offset, const std::string& parent_prefix) {
+void print_struct_members_recursively(std::ostream& out, Dwarf_Off struct_type_offset, Dwarf_Unsigned base_offset, const std::string& parent_prefix) {
 	if (die_map.find(struct_type_offset) == die_map.end()) return;
 	DieInfo& info = die_map[struct_type_offset];
 
@@ -325,7 +322,8 @@ void print_struct_members_recursively(uni::OstreamTrait& out, Dwarf_Off struct_t
 			}
 
 			// 3. 打印当前成员节点本身
-			out.OutFormat("\t%u\t%s\t\'%s\'\n", abs_offset, print_name.c_str(), get_type_name(memberInfo.type_offset).c_str());
+			out << '\t' << abs_offset << '\t' << print_name << "\t'"
+				<< get_type_name(memberInfo.type_offset) << "'\n";
 			// std::cout << "    " << std::left << std::setw(6) << abs_offset
 			// 			<< std::setw(15) << print_name
 			// 			<< get_type_name(memberInfo.type_offset) << "\n";
@@ -359,7 +357,7 @@ int main(int argc, char* argv[]) {
 	Dwarf_Error err = nullptr;
 
 	// 初始化 libdwarf，成功返回 DW_DLV_OK
-	if (dwarf_init_b(fd, 0, nullptr, nullptr, &dbg, &err) != DW_DLV_OK) {
+	if (dwarf_init_b(fd, 0, DW_GROUPNUMBER_ANY, nullptr, nullptr, &dbg, &err) != DW_DLV_OK) {
 		std::cerr << "初始化 DWARF 失败" << std::endl;
 		close(fd);
 		return 1;
@@ -403,35 +401,48 @@ int main(int argc, char* argv[]) {
 	// "\n======= 类型 =======" << std::endl;
 
 
-	using namespace uni;
-	OstreamTrait* pout = &uni::Console;
-	HostFile* hf = nullptr;
+	std::ostream* pout = &std::cout;
+	std::ofstream type_file;
 	if (argc > 2) {
-		hf = new HostFile(argv[2], FileOpenType::Write);
-		if (hf) pout = hf;
+		type_file.open(argv[2], std::ios::out | std::ios::trunc);
+		if (!type_file) {
+			std::cerr << "无法创建类型输出文件: " << argv[2] << std::endl;
+			dwarf_finish(dbg, &err);
+			close(fd);
+			return 1;
+		}
+		pout = &type_file;
 	}
 	for (auto const& [offset, info] : die_map) {
 		// 如果是结构体，并且有名字
 		if (info.tag == DW_TAG_structure_type && !info.name.empty()) {
-			pout->OutFormat("%s\t%llu\n", info.name.c_str(), info.byte_size);
+			*pout << info.name << '\t' << info.byte_size << '\n';
 			print_struct_members_recursively(*pout, offset, 0, "");
 		}
 	}
-	if (hf) delete hf;
-	pout = &uni::Console;
+	type_file.close();
+	pout = &std::cout;
+	std::ofstream variable_file;
 	if (argc > 3) {
-		hf = new HostFile(argv[3], FileOpenType::Write);
-		if (hf) pout = hf;
+		variable_file.open(argv[3], std::ios::out | std::ios::trunc);
+		if (!variable_file) {
+			std::cerr << "无法创建变量输出文件: " << argv[3] << std::endl;
+			dwarf_finish(dbg, &err);
+			close(fd);
+			return 1;
+		}
+		pout = &variable_file;
 	} 
 	// "======= 全局变量 =======" << std::endl;
 	for (auto const& [offset, info] : die_map) {
 		// 如果是变量，并且我们成功提取到了它的物理地址
 		if (info.tag == DW_TAG_variable && info.has_addr) {
-			pout->OutFormat("%s\t%u\t\'%s\'\n", info.name.c_str(), info.addr, get_type_name(info.type_offset).c_str());
+			*pout << info.name << '\t' << info.addr << "\t'"
+				<< get_type_name(info.type_offset) << "'\n";
 		}
 	}
 
-	dwarf_finish(dbg);
+	dwarf_finish(dbg, &err);
 	close(fd);
-
+	return 0;
 }

@@ -1,0 +1,12 @@
+# Generated trace, graph, report and native build outputs.
+/csv/
+/reports/
+/*.ll
+/*.exe
+/trace*.csv
+/access_trace*.csv
+/graph*.dot
+/graph*.txt
+/graph*.decision.json
+/types.txt
+/vars.txt

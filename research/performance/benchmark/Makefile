@@ -1,6 +1,9 @@
 
 awiki_path = /her/alicewiki
 affspath = $(awiki_path)/research/performance/cache/af-fs-graph
+PASS_SO ?= $(affspath)/field_analysis/build/FieldAnalysis.so
+RUNTIME_LIB ?= $(affspath)/field_analysis/build/runtime/libaffinity.a
+DBG_VIEWTYPE ?= dbg-viewtype
 
 SRCS ?= $(wildcard *.cpp)
 BIN ?= t.exe
@@ -24,11 +27,11 @@ REPORT = $(REPORTDIR)/$(TAG).txt
 all: $(BIN)
 
 $(BIN): targ.ll
-	clang++ targ.ll  ../build/runtime/libaffinity.a -lpthread  -static -g -gdwarf-4 -o $(BIN)
+	clang++ targ.ll $(RUNTIME_LIB) -lpthread -static -g -gdwarf-4 -o $(BIN)
 	rm *json
 
 targ.ll: tsin.ll
-	opt -load-pass-plugin=../build/FieldAnalysis.so -passes="field-analysis" $< -S -o $@ 
+	opt -load-pass-plugin=$(PASS_SO) -passes="field-analysis" $< -S -o $@
 
 tsin.ll: $(TU_LL)
 	@if [ -z "$(strip $(TU_LL))" ]; then echo "✖ 当前目录没有 .cpp, 请用 make SRCS=xxx.cpp 指定"; exit 1; fi; \
@@ -54,8 +57,8 @@ $(TRACE): $(BIN)
 run: $(TRACE)
 
 opt: $(TRACE) $(BIN)
-	rm -rf *.dot *.txt *.layout.txt
-	$(affspath)/generator/target/debug/generator -i $(TRACE) -o graph.dot --binary $(BIN) --window $(TAU) 
+	rm -rf *.dot *.txt *.layout.txt *.decision.json
+	$(affspath)/generator/target/debug/generator -i $(TRACE) -o graph.dot --binary $(BIN) --dbg-viewtype $(DBG_VIEWTYPE) --window $(TAU)
 	@for file in graph.*.dot; do \
 		case "$$file" in \
 			*.fields.dot) \
@@ -80,7 +83,7 @@ report:
 	@{ \
 		echo "run: src=$(SRCS) trace=$(TRACE) ($$(wc -l < $(TRACE) 2>/dev/null || echo 0) 行) k=$(K) g=$(G) gamma=$(GAMMA) line=$(LINE) window=$(TAU)ns"; \
 		echo; \
-		python $(affspath)/summarize.py .; \
+		DBG_VIEWTYPE=$(DBG_VIEWTYPE) python $(affspath)/summarize.py .; \
 	} | tee $(REPORT)
 
 sum: report
@@ -88,12 +91,12 @@ sum: report
 verify: report
 	@latest=$$(ls -t $(REPORTDIR)/*.txt | head -n 1); \
 	echo "▶ 幂等自检: $$latest"; \
-	printf "  transpose: %s\n" "$$(grep -c '强烈建议' $$latest)"; \
+	printf "  transpose: %s\n" "$$(grep -c '执行轴置换' $$latest)"; \
 	printf "  repack   : %s\n" "$$(grep -c '发现更优布局' $$latest)"; \
 	printf "  keep     : %s\n" "$$(grep -c '维持现有' $$latest)"
 
 clean:
-	rm -rf *.dot *.txt *.layout.txt *csv reports *.ll *.exe
+	rm -rf *.dot *.txt *.layout.txt *.decision.json *csv reports *.ll *.exe
 
 distclean: clean
 	rm -rf tsin.ll targ.ll $(TU_LL) $(BIN) csv $(TRACE)

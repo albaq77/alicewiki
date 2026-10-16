@@ -1,0 +1,10 @@
+// Generated from verified layout decisions; model cacheline = 64 bytes.
+constexpr size_t MATRIX_MOD = 32;
+constexpr size_t TENSOR_MOD = 32;
+constexpr size_t ENTITY_MOD = 32;
+constexpr size_t ENTITY_FIELD = offsetof(ComplexEntity, health);
+constexpr size_t WEAPON_MOD = 32;
+constexpr size_t WEAPON_FIELD = offsetof(WeaponStats, base_damage);
+constexpr size_t GLOBAL_MOD = 16;
+constexpr size_t GLOBAL_OLD[16] = {0,8,16,24,32,40,48,56,64,72,80,88,96,104,112,120};
+constexpr size_t GLOBAL_NEW[16] = {0,8,16,24,192,200,208,216,80,88,64,72,128,136,144,152};

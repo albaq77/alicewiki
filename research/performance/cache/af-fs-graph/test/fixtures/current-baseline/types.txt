@@ -1,0 +1,106 @@
+_G_fpos_t	0
+lconv	0
+allocator_arg_t	1
+_Tuple_impl<0UL, void (*)(int), int>	16
+_Head_base<0UL, void (*)(int), false>	8
+	0	_M_head_impl	'anonymous*'
+tuple_element<1UL, std::tuple<void (*)(int), int> >	1
+_Tuple_impl<1UL, int>	4
+_Head_base<1UL, int, false>	4
+	0	_M_head_impl	'int'
+__uses_alloc0	1
+	0	_M_a	'_Sink'
+integral_constant<bool, false>	1
+	0	value	'const bool'
+integral_constant<bool, true>	1
+	0	value	'const bool'
+allocator_traits<std::allocator<std::thread> >	1
+_Vector_base<std::thread, std::allocator<std::thread> >	24
+	0	_M_impl	'_Vector_impl'
+tuple_element<0UL, std::tuple<void (*)(int), int> >	1
+_State	0
+__type_identity<std::allocator<std::thread> >	1
+__uniq_ptr_data<std::thread::_State, std::default_delete<std::thread::_State>, true, true>	8
+default_delete<std::thread::_State>	1
+__result_of_success<void, std::__invoke_other>	1
+_Vector_impl_data	24
+	0	_M_start	'pointer'
+	8	_M_finish	'pointer'
+	16	_M_end_of_storage	'pointer'
+_Tuple_impl<0UL, std::thread::_State *, std::default_delete<std::thread::_State> >	8
+_Invoker<std::tuple<void (*)(int), int> >	16
+	0	_M_t	'tuple<void (*)(int), int>'
+rebind<std::thread>	1
+_State_impl<std::thread::_Invoker<std::tuple<void (*)(int), int> > >	24
+	8	_M_func	'_Invoker<std::tuple<void (*)(int), int> >'
+	8	_M_func._M_t	'tuple<void (*)(int), int>'
+__invoke_other	1
+_Index_tuple<0UL, 1UL>	1
+_Tuple_impl<1UL, std::default_delete<std::thread::_State> >	1
+iterator_traits<std::thread *>	1
+_Head_base<1UL, std::default_delete<std::thread::_State>, true>	1
+	0	_M_head_impl	'default_delete<std::thread::_State>'
+__add_lvalue_reference_helper<std::thread::_State, true>	1
+_Sink	1
+__uses_alloc_base	1
+_Head_base<0UL, std::thread::_State *, false>	8
+	0	_M_head_impl	'_State*'
+__conditional<true>	1
+tuple_element<1UL, std::tuple<std::thread::_State *, std::default_delete<std::thread::_State> > >	1
+_IO_FILE	0
+__va_list	32
+	0	__stack	'void*'
+	8	__gr_top	'void*'
+	16	__vr_top	'void*'
+	24	__gr_offs	'int'
+	28	__vr_offs	'int'
+WeaponStats	240
+	0	base_damage	'volatile long'
+	8	durability	'volatile long'
+	16	unused_pad1	'volatile long[8]'
+	80	critical_chance	'volatile long'
+	88	attack_speed	'volatile long'
+	96	unused_pad2	'volatile long[8]'
+	160	element_type	'volatile long'
+	168	weight	'volatile long'
+	176	unused_pad3	'volatile long[8]'
+_Vector_impl	24
+enable_if<true, void>	1
+_Nth_type<1UL, std::thread::_State *, std::default_delete<std::thread::_State> >	1
+tuple_element<0UL, std::tuple<std::thread::_State *, std::default_delete<std::thread::_State> > >	1
+_Nth_type<0UL, std::thread::_State *, std::default_delete<std::thread::_State> >	1
+_Nth_type<0UL, void (*)(int), int>	1
+_Nth_type<1UL, void (*)(int), int>	1
+GameConfig	288
+	0	difficulty	'volatile long'
+	8	max_retries	'volatile long'
+	16	unused_flags1	'volatile long[10]'
+	96	max_players	'volatile long'
+	104	timeout_ms	'volatile long'
+	112	unused_flags2	'volatile long[10]'
+	192	spawn_rate	'volatile long'
+	200	drop_rate	'volatile long'
+	208	unused_flags3	'volatile long[10]'
+ComplexEntity	320
+	0	health	'volatile long'
+	8	padding1	'volatile long[7]'
+	64	mana	'volatile long'
+	72	padding2	'volatile long[7]'
+	128	pos_x	'volatile long'
+	136	pos_y	'volatile long'
+	144	padding3	'volatile long[6]'
+	192	velocity_x	'volatile long'
+	200	velocity_y	'volatile long'
+	208	score	'volatile long'
+	216	level	'volatile long'
+	224	experience	'volatile long'
+	232	gold	'volatile long'
+	240	padding_cold	'volatile long[10]'
+__success_type<void>	1
+__alloc_traits<std::allocator<std::thread>, std::thread>	1
+timespec	16
+	0	tv_sec	'__time_t'
+	8	tv_nsec	'__syscall_slong_t'
+_Destroy_aux<false>	1
+tm	0
+_Ptr<std::thread::_State, std::default_delete<std::thread::_State>, void>	1
